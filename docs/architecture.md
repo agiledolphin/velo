@@ -1,4 +1,4 @@
-# Velo 第一阶段架构
+# Velo 架构
 
 Velo 当前采用模块化单体结构。UI 不依赖具体下载引擎，Tauri 命令只作为进程边界，业务接口和领域模型保留在 Rust 核心内。
 
@@ -10,19 +10,45 @@ Tauri command
    ▼
 AppState / MediaEngine
    ▼
-MockMediaEngine
+YtDlpEngine / RestrictedProcessRunner
 ```
 
 ## 模块职责
 
 - `domain`：媒体信息、格式和可序列化错误。
 - `application`：`MediaEngine` 接口和应用状态。
-- `infrastructure`：引擎的具体实现；当前只有 Mock。
+- `infrastructure`：受限进程执行器和 `YtDlpEngine`；Mock 仅用于单元测试。
 - `commands`：将前端调用转交给应用层，不构造媒体数据。
 
-## 后续替换点
+## 引擎替换点
 
-第二阶段新增 `YtDlpEngine` 并实现同一个 `MediaEngine` 接口。前端、命令层和领域模型不需要因引擎变化而重写。
+第二阶段已由 `YtDlpEngine` 实现同一个 `MediaEngine` 接口。前端、命令层和领域模型没有因引擎变化而重写；浏览器开发预览仍使用只读 fixture。
+
+`MediaEngine` 和 Tauri 解析命令已改为异步边界，以便等待外部进程而不阻塞应用线程。
+
+每次前端解析使用一个受长度与字符集约束的请求 ID。`AppState` 只登记仍在运行的请求，取消命令通过对应通道通知解析任务；异步选择器随后释放引擎 Future。由于受限进程执行器为子进程启用了 drop 时终止，取消会实际停止对应的 yt-dlp，而不只是让界面停止等待。重复 ID 会取消旧任务，任务完成后仅清理自己的登记，从而避免并发竞态。
+
+## 外部进程边界
+
+第二阶段使用 `RestrictedProcessRunner` 作为所有媒体工具的唯一进程入口：
+
+- 可执行文件在构造执行器时使用绝对路径固定，调用方只能传递独立参数。
+- 不经过 Shell，不拼接命令字符串，标准输入始终关闭。
+- 标准输出和标准错误并发读取，并分别应用可配置的字节上限。
+- 超时后主动终止并回收子进程，避免遗留后台进程。
+- 执行错误使用有限枚举表示，不向界面暴露本地路径或原始系统错误。
+
+`YtDlpEngine` 已组合该执行器，并将 yt-dlp JSON 规范化为领域模型。可执行文件优先读取绝对路径环境变量 `VELO_YT_DLP_PATH`，其次查找应用同目录，开发环境最后回退到项目 `binaries/` 目录。
+
+当 yt-dlp 非零退出时，基础设施层只在小写化的受限 stderr 内匹配有限信号，并按优先级映射为限流、地区限制、登录、站点不支持、内容不可用、访问拒绝或网络错误；未知情况保持通用引擎错误。原始 stderr、URL、账号信息和本地路径均不会进入序列化错误。该分类是用户提示层，不依赖它决定进程权限或执行参数。
+
+开发工具将 yt-dlp 固定为单一版本，并按当前操作系统和 CPU 架构选择官方资源。安装过程限制响应大小，使用硬编码 SHA-256 校验内容，通过临时文件和重命名完成原子替换，再验证实际安装版本；更新或验证失败时恢复原文件。下载所得二进制位于 Git 忽略的 `binaries/`，不进入源码历史。
+
+Tauri 开发与发布构建钩子读取 `TAURI_ENV_TARGET_TRIPLE`，将目标映射到固定的官方资产。脚本优先复用校验通过且与目标兼容的开发引擎，否则下载对应资产；随后以 `yt-dlp-$TARGET_TRIPLE` 命名写入 Git 忽略的 `src-tauri/binaries/`。`bundle.externalBin` 将其作为 sidecar 放到应用可执行文件旁，并移除目标后缀。运行时现有的同目录查找因此不需要 Shell 插件或额外前端权限。
+
+当前已验证 Apple Silicon macOS `.app` 内包含正确 SHA-256 且可运行的 yt-dlp。Windows x64 与 Linux x64 工作流在原生 GitHub 运行器中执行测试、Clippy 和 Tauri 发布构建，随后分别检查 NSIS、DEB 的文件清单是否包含 sidecar，并上传短期产物。工作流首次成功前仍不把配置存在视为平台验证完成。
+
+每次解析固定使用模拟、单视频和单行 JSON 参数，并忽略用户配置、插件目录、外部 JavaScript 运行时、远程组件、缓存与 `exec`。URL 位于参数终止符之后，不能被解释为命令选项。禁用外部 JavaScript 运行时会暂时降低部分站点兼容性，后续仅在有可控打包方案时放开。
 
 纯浏览器开发模式无法调用 Tauri IPC，因此在 `Vite DEV` 且不处于 Tauri 环境时使用一份只读预览 fixture，方便检查完整 UI。Tauri 开发和生产环境始终调用 Rust 引擎。
 
@@ -30,7 +56,13 @@ MockMediaEngine
 
 - 前后端都只接受 HTTP 和 HTTPS 地址。
 - UI 不能提交任意命令行参数。
+- UI 只能按已登记的请求 ID 取消解析，不能指定或终止任意系统进程。
 - 默认能力仅包含 Tauri 核心权限和顶部自定义标题区所需的窗口拖拽权限。
-- 第一阶段未启动外部进程、未读写下载目录、未处理凭证。
+- yt-dlp 只在模拟模式下读取媒体信息，不下载文件、不加载 Cookie、不写缓存。
+- 当前不显示远程封面，因此尚未向 WebView 开放远程图片来源。
 
-开发阶段暂时沿用 Tauri 模板的空 CSP；引入远程封面或媒体引擎之前必须设置明确的内容安全策略。
+生产 CSP 使用 `default-src 'none'`，仅允许自身脚本、样式、字体与图片，以及 Tauri IPC 所需的 `ipc:` 和 `http://ipc.localhost` 连接。对象、框架、媒体、Worker、Manifest、表单提交和基础 URL 均显式禁用；不开放 `unsafe-inline`、`unsafe-eval`、远程协议、通配符或文件资产协议。
+
+Tauri 配置显式启用唯一的 `default` capability，避免以后新增 capability 文件时被构建系统自动纳入。该 capability 目前仍只授予核心默认权限和自定义顶部区域所需的窗口拖动权限。
+
+开发 CSP 与生产策略分离，只为 Vite 增加自身连接、本机热更新 WebSocket、动态样式和预览所需的 `data:` / `blob:` 图片。显示远程封面或扩大 WebView 网络能力时，必须单独评审来源并同步更新安全回归测试，不能直接开放任意 HTTPS 来源。

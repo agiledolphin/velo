@@ -6,9 +6,15 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "bun run engine:verify && bun run tauri dev",
     "build": "tsc --noEmit && vite build",
+    "build:desktop": "bun run tauri build",
+    "engine:install": "bun scripts/install-engine.ts",
+    "engine:prepare-sidecar": "bun scripts/prepare-sidecar.ts",
+    "engine:verify": "bun scripts/verify-engine.ts",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml infrastructure::yt_dlp_engine::tests::inspects_configured_real_url -- --ignored --exact --nocapture",
     "test:watch": "vitest",
     "tauri": "tauri"
   },

@@ -26,6 +26,8 @@ src-tauri/gen/schemas/
 # Logs
 *.log
 
-# Download engine binaries are added deliberately per platform.
+# Downloaded development and Tauri sidecar engine binaries.
 binaries/*
 !binaries/.gitkeep
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

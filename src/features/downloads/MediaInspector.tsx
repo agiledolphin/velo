@@ -1,10 +1,10 @@
-import { FormEvent, useId, useState } from "react";
+import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import type { MediaInfo } from "../../lib/media";
 import { normalizeWebUrl } from "../../lib/url";
-import { inspectMedia } from "../../lib/velo-api";
+import { inspectMedia, isInspectionAbort } from "../../lib/velo-api";
 
 type InspectorState =
-  | { status: "idle" }
+  | { status: "idle"; notice?: string }
   | { status: "loading" }
   | { status: "ready"; media: MediaInfo }
   | { status: "error"; message: string };
@@ -25,6 +25,26 @@ export function MediaInspector() {
   const inputId = useId();
   const [url, setUrl] = useState("");
   const [state, setState] = useState<InspectorState>({ status: "idle" });
+  const activeRequest = useRef<{
+    id: string;
+    controller: AbortController;
+  } | null>(null);
+
+  useEffect(
+    () => () => {
+      activeRequest.current?.controller.abort();
+    },
+    [],
+  );
+
+  function handleCancel() {
+    const request = activeRequest.current;
+    if (!request) return;
+
+    activeRequest.current = null;
+    request.controller.abort();
+    setState({ status: "idle", notice: "解析已取消" });
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,11 +55,25 @@ export function MediaInspector() {
       return;
     }
 
+    const requestId = crypto.randomUUID();
+    const controller = new AbortController();
+    activeRequest.current = { id: requestId, controller };
     setState({ status: "loading" });
     try {
-      const media = await inspectMedia(normalizedUrl);
+      const media = await inspectMedia(normalizedUrl, {
+        requestId,
+        signal: controller.signal,
+      });
+      if (activeRequest.current?.id !== requestId) return;
+      activeRequest.current = null;
       setState({ status: "ready", media });
     } catch (error) {
+      if (activeRequest.current?.id !== requestId) return;
+      activeRequest.current = null;
+      if (isInspectionAbort(error)) {
+        setState({ status: "idle", notice: "解析已取消" });
+        return;
+      }
       setState({
         status: "error",
         message: error instanceof Error ? error.message : "暂时无法解析这个地址。",
@@ -66,12 +100,21 @@ export function MediaInspector() {
             aria-describedby={state.status === "error" ? `${inputId}-error` : undefined}
             onChange={(event) => {
               setUrl(event.target.value);
-              if (state.status === "error") setState({ status: "idle" });
+              if (
+                state.status === "error" ||
+                (state.status === "idle" && state.notice)
+              ) {
+                setState({ status: "idle" });
+              }
             }}
           />
-          <button type="submit" disabled={state.status === "loading"}>
-            {state.status === "loading" ? "正在辨认" : "解析视频"}
-            <span aria-hidden="true">→</span>
+          <button
+            className={state.status === "loading" ? "cancel-inspection" : undefined}
+            type={state.status === "loading" ? "button" : "submit"}
+            onClick={state.status === "loading" ? handleCancel : undefined}
+          >
+            {state.status === "loading" ? "取消解析" : "解析视频"}
+            <span aria-hidden="true">{state.status === "loading" ? "×" : "→"}</span>
           </button>
           <span className="capture-glint" aria-hidden="true" />
         </div>
@@ -84,8 +127,12 @@ export function MediaInspector() {
         {state.status === "idle" && (
           <div className="empty-state">
             <span className="pulse-dot" aria-hidden="true" />
-            <p>等待一个视频地址</p>
-            <span>第一阶段使用模拟引擎，不会发起真实下载。</span>
+            <p>{state.notice ?? "等待一个视频地址"}</p>
+            <span>
+              {state.notice
+                ? "可以修改地址后重新开始。"
+                : "微落只读取媒体信息，不会自动下载文件。"}
+            </span>
           </div>
         )}
 
@@ -122,7 +169,7 @@ function MediaResult({ media }: { media: MediaInfo }) {
         <div>
           <span className="site-label">{media.site}</span>
           <h2>{media.title}</h2>
-          <p>{formatDuration(media.durationSeconds)} · 模拟解析结果</p>
+          <p>{formatDuration(media.durationSeconds)} · 解析结果</p>
         </div>
       </div>
 
@@ -144,7 +191,7 @@ function MediaResult({ media }: { media: MediaInfo }) {
       </div>
 
       <button className="download-button" type="button" disabled>
-        下载功能将在第二阶段启用
+        当前仅支持媒体解析
       </button>
     </article>
   );

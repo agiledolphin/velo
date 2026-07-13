@@ -1,0 +1,43 @@
+{
+  "id": "video-42",
+  "title": "一段真实的流光",
+  "webpage_url": "https://video.example/watch?v=42",
+  "webpage_url_domain": "video.example",
+  "thumbnail": "https://cdn.video.example/thumb.jpg",
+  "duration": 213.4,
+  "formats": [
+    {
+      "format_id": "storyboard",
+      "ext": "mhtml",
+      "width": 160,
+      "height": 90,
+      "vcodec": "none",
+      "acodec": "none"
+    },
+    {
+      "format_id": "140",
+      "ext": "m4a",
+      "filesize": 5033164,
+      "vcodec": "none",
+      "acodec": "mp4a.40.2"
+    },
+    {
+      "format_id": "22",
+      "ext": "mp4",
+      "width": 1280,
+      "height": 720,
+      "filesize": 50331648,
+      "vcodec": "avc1.64001F",
+      "acodec": "mp4a.40.2"
+    },
+    {
+      "format_id": "137",
+      "ext": "mp4",
+      "width": 1920,
+      "height": 1080,
+      "filesize_approx": 90177536,
+      "vcodec": "avc1.640028",
+      "acodec": "none"
+    }
+  ]
+}

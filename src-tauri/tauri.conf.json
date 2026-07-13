@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "app.velo.desktop",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "bun run engine:prepare-sidecar && bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "bun run engine:prepare-sidecar && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -30,12 +30,45 @@
       }
     ],
     "security": {
-      "csp": null
+      "capabilities": ["default"],
+      "csp": {
+        "default-src": "'none'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "font-src": "'self'",
+        "img-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'",
+        "frame-ancestors": "'none'",
+        "media-src": "'none'",
+        "worker-src": "'none'",
+        "manifest-src": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'none'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "font-src": "'self'",
+        "img-src": "'self' data: blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost ws://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-src": "'none'",
+        "frame-ancestors": "'none'",
+        "media-src": "'none'",
+        "worker-src": "'none'",
+        "manifest-src": "'none'"
+      }
     }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/yt-dlp"],
     "category": "Utility",
     "shortDescription": "轻取流光，留住此刻。",
     "longDescription": "Velo / 微落是一款简洁的桌面视频保存工具。"

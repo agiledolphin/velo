@@ -42,23 +42,59 @@ function isInspectFailure(value: unknown): value is InspectFailure {
   );
 }
 
-export async function inspectMedia(url: string): Promise<MediaInfo> {
+export interface InspectMediaOptions {
+  requestId: string;
+  signal: AbortSignal;
+}
+
+function abortError() {
+  return new DOMException("解析已取消。", "AbortError");
+}
+
+export function isInspectionAbort(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+export async function inspectMedia(
+  url: string,
+  { requestId, signal }: InspectMediaOptions,
+): Promise<MediaInfo> {
+  if (signal.aborted) throw abortError();
+
+  const runningInTauri = isTauri();
+  let rejectAbort: (reason: DOMException) => void = () => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    rejectAbort = reject;
+  });
+  const handleAbort = () => {
+    if (runningInTauri) {
+      void invoke("cancel_inspection", { requestId }).catch(() => undefined);
+    }
+    rejectAbort(abortError());
+  };
+  signal.addEventListener("abort", handleAbort, { once: true });
+
   try {
     const request =
-      import.meta.env.DEV && !isTauri()
+      import.meta.env.DEV && !runningInTauri
         ? Promise.resolve(browserPreviewMedia(url))
-        : invoke<MediaInfo>("inspect_url", { url });
+        : invoke<MediaInfo>("inspect_url", { requestId, url });
 
-    const [media] = await Promise.all([
-      request,
-      new Promise((resolve) => window.setTimeout(resolve, 420)),
+    return await Promise.race([
+      Promise.all([
+        request,
+        new Promise((resolve) => globalThis.setTimeout(resolve, 420)),
+      ]).then(([media]) => media),
+      aborted,
     ]);
-    return media;
   } catch (error) {
+    if (isInspectionAbort(error)) throw error;
     if (isInspectFailure(error)) {
       throw new Error(error.message);
     }
 
     throw new Error("暂时无法解析这个地址，请稍后再试。");
+  } finally {
+    signal.removeEventListener("abort", handleAbort);
   }
 }

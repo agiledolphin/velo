@@ -286,6 +286,15 @@ input:disabled {
   transform: translateX(1px);
 }
 
+.url-capture .cancel-inspection {
+  background: #3f4b50;
+}
+
+.url-capture .cancel-inspection:hover {
+  background: var(--danger);
+  transform: none;
+}
+
 .url-capture button:disabled {
   opacity: 0.72;
 }
