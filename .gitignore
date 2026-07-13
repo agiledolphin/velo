@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Frontend output
+dist/
+coverage/
+
+# Rust output
+target/
+src-tauri/target/
+
+# Tauri-generated capability schemas
+src-tauri/gen/schemas/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs
+*.log
+
+# Download engine binaries are added deliberately per platform.
+binaries/*
+!binaries/.gitkeep
