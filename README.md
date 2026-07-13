@@ -43,3 +43,10 @@ cd src-tauri && cargo test
 - `src-tauri/src/infrastructure/`：Mock 与未来的媒体引擎适配器
 - `src-tauri/src/commands/`：Tauri 命令边界
 - `docs/`：产品和架构决策
+
+## 项目文档
+
+- [`PLAN.md`](PLAN.md)：开发阶段、任务状态与验收条件
+- [`CHANGELOG.md`](CHANGELOG.md)：版本变化与当前限制
+- [`docs/product.md`](docs/product.md)：当前阶段的产品范围
+- [`docs/architecture.md`](docs/architecture.md)：模块职责与安全边界
