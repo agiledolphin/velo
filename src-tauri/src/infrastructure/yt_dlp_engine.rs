@@ -587,8 +587,9 @@ mod tests {
         assert!(!media.title.is_empty());
         assert!(!media.formats.is_empty());
         println!(
-            "解析成功：{}（{} 个格式）",
-            media.title,
+            "解析成功：站点={}；时长={} 秒；格式数={}",
+            media.site,
+            media.duration_seconds.unwrap_or_default(),
             media.formats.len()
         );
     }

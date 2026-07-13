@@ -1,0 +1,60 @@
+name: Site compatibility check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            enginePath: binaries/yt-dlp
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            enginePath: binaries/yt-dlp.exe
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            enginePath: binaries/yt-dlp
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Prepare verified yt-dlp
+        env:
+          TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
+        run: |
+          bun run engine:install
+          bun run engine:prepare-sidecar
+
+      - name: Inspect authorized site URL
+        env:
+          VELO_INTEGRATION_TEST_URL: ${{ secrets.VELO_INTEGRATION_TEST_URL }}
+          VELO_YT_DLP_PATH: ${{ github.workspace }}/${{ matrix.enginePath }}
+        run: bun run test:integration

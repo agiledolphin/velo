@@ -27,6 +27,14 @@ async function loadPlatformWorkflow(): Promise<string> {
   );
 }
 
+async function loadCompatibilityWorkflow(): Promise<string> {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  return readFile(
+    resolve(directory, "../.github/workflows/site-compatibility-check.yml"),
+    "utf8",
+  );
+}
+
 describe("Tauri sidecar bundle configuration", () => {
   it("prepares the pinned engine before desktop development and builds", async () => {
     const config = await loadTauriConfig();
@@ -49,5 +57,16 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(workflow).toContain("dpkg-deb --contents");
     expect(workflow).toContain("7z l");
     expect(workflow).toContain("actions/upload-artifact@v7");
+  });
+
+  it("runs authorized site checks without storing the URL in the workflow", async () => {
+    const workflow = await loadCompatibilityWorkflow();
+
+    expect(workflow).toContain("macos-latest");
+    expect(workflow).toContain("windows-latest");
+    expect(workflow).toContain("ubuntu-latest");
+    expect(workflow).toContain("secrets.VELO_INTEGRATION_TEST_URL");
+    expect(workflow).toContain("bun run test:integration");
+    expect(workflow).not.toMatch(/https?:\/\/[^\s]+\/video/);
   });
 });

@@ -28,6 +28,8 @@
 - 增加 Windows x64 NSIS 与 Linux x64 DEB 原生 CI，运行测试、Clippy、应用构建、sidecar 内容检查并保留短期构建产物。
 - 跨平台 Rust 测试前先准备目标架构 sidecar，确保 Tauri 构建脚本可以验证 `externalBin`。
 - Windows x64 NSIS 与 Linux x64 DEB 已在 GitHub Actions 运行 `29291541333` 中通过原生打包、sidecar 内容检查和产物上传。
+- 增加手动三平台真实站点兼容性工作流，待测地址仅从 GitHub Actions Secret 读取，日志不输出原始地址或媒体标题。
+- 增加真实站点测试范围说明与兼容性矩阵文档。
 
 ### 调整
 

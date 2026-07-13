@@ -46,7 +46,9 @@ YtDlpEngine / RestrictedProcessRunner
 
 Tauri 开发与发布构建钩子读取 `TAURI_ENV_TARGET_TRIPLE`，将目标映射到固定的官方资产。脚本优先复用校验通过且与目标兼容的开发引擎，否则下载对应资产；随后以 `yt-dlp-$TARGET_TRIPLE` 命名写入 Git 忽略的 `src-tauri/binaries/`。`bundle.externalBin` 将其作为 sidecar 放到应用可执行文件旁，并移除目标后缀。运行时现有的同目录查找因此不需要 Shell 插件或额外前端权限。
 
-当前已验证 Apple Silicon macOS `.app` 内包含正确 SHA-256 且可运行的 yt-dlp。Windows x64 与 Linux x64 工作流在原生 GitHub 运行器中执行测试、Clippy 和 Tauri 发布构建，随后分别检查 NSIS、DEB 的文件清单是否包含 sidecar，并上传短期产物。工作流首次成功前仍不把配置存在视为平台验证完成。
+当前已验证 Apple Silicon macOS `.app` 内包含正确 SHA-256 且可运行的 yt-dlp。Windows x64 与 Linux x64 已在原生 GitHub 运行器中通过测试、Clippy、Tauri 发布构建、NSIS/DEB sidecar 内容检查和产物上传。
+
+真实站点兼容性使用独立的手动工作流验证。地址只从仓库 Actions Secret 读取，不进入源码、工作流输入或测试输出；同一个忽略型集成测试在 macOS arm64、Windows x64 与 Linux x64 上运行，并只输出规范化站点名、时长和格式数量。测试范围与结果记录在 `docs/site-compatibility.md`。
 
 每次解析固定使用模拟、单视频和单行 JSON 参数，并忽略用户配置、插件目录、外部 JavaScript 运行时、远程组件、缓存与 `exec`。URL 位于参数终止符之后，不能被解释为命令选项。禁用外部 JavaScript 运行时会暂时降低部分站点兼容性，后续仅在有可控打包方案时放开。
 
