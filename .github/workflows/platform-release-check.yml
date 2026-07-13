@@ -89,7 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Unable to inspect NSIS installer" }
           if (-not ($listing | Select-String -SimpleMatch "yt-dlp.exe")) { throw "yt-dlp.exe is missing from NSIS installer" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifactName }}
           path: ${{ matrix.artifactPath }}

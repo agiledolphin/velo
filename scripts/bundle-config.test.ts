@@ -48,6 +48,6 @@ describe("Tauri sidecar bundle configuration", () => {
     );
     expect(workflow).toContain("dpkg-deb --contents");
     expect(workflow).toContain("7z l");
-    expect(workflow).toContain("actions/upload-artifact@v4");
+    expect(workflow).toContain("actions/upload-artifact@v7");
   });
 });

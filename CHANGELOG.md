@@ -27,6 +27,7 @@
 - 增加错误分类与原始 stderr 隔离测试，避免向界面暴露本地路径或引擎诊断细节。
 - 增加 Windows x64 NSIS 与 Linux x64 DEB 原生 CI，运行测试、Clippy、应用构建、sidecar 内容检查并保留短期构建产物。
 - 跨平台 Rust 测试前先准备目标架构 sidecar，确保 Tauri 构建脚本可以验证 `externalBin`。
+- Windows x64 NSIS 与 Linux x64 DEB 已在 GitHub Actions 运行 `29291541333` 中通过原生打包、sidecar 内容检查和产物上传。
 
 ### 调整
 
@@ -34,12 +35,12 @@
 - 将 Tokio `1.52.3` 声明为直接依赖，仅启用进程、时间、异步 IO、运行时和测试宏所需功能。
 - Tauri 运行时由 Mock 引擎切换为真实 `YtDlpEngine`；浏览器开发预览继续使用只读 fixture。
 - 更新界面文案，移除“模拟解析结果”和过期的阶段提示。
+- 将构建产物上传动作升级至 `actions/upload-artifact@v7`，使用当前 Node.js 24 运行时。
 
 ### 限制
 
-- macOS 应用包已验证包含可运行的 yt-dlp；Windows 与 Linux 构建仍需在对应 CI 环境验证。
 - 真实站点测试需要调用方提供有权测试的地址，默认不会访问网络。
-- Windows 与 Linux 工作流需在本次改动推送后取得首次成功结果；未来显示远程封面前需要单独评审并收紧来源范围。
+- 未来显示远程封面前需要单独评审并收紧来源范围。
 
 ## 0.1.0 - 2026-07-13
 
