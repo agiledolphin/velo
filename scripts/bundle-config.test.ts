@@ -41,6 +41,8 @@ describe("Tauri sidecar bundle configuration", () => {
 
     expect(workflow).toContain("x86_64-pc-windows-msvc");
     expect(workflow).toContain("x86_64-unknown-linux-gnu");
+    expect(workflow).toContain("TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}");
+    expect(workflow).toContain("bun run engine:prepare-sidecar");
     expect(workflow).toContain(
       "--ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}",
     );

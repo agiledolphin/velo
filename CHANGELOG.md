@@ -26,6 +26,7 @@
 - 增加 yt-dlp 站点失败分类：登录、权限、地区限制、请求限流、不支持地址、内容不可用和网络错误。
 - 增加错误分类与原始 stderr 隔离测试，避免向界面暴露本地路径或引擎诊断细节。
 - 增加 Windows x64 NSIS 与 Linux x64 DEB 原生 CI，运行测试、Clippy、应用构建、sidecar 内容检查并保留短期构建产物。
+- 跨平台 Rust 测试前先准备目标架构 sidecar，确保 Tauri 构建脚本可以验证 `externalBin`。
 
 ### 调整
 

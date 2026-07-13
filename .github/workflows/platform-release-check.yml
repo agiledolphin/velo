@@ -56,6 +56,11 @@ jobs:
       - name: Run frontend and configuration tests
         run: bun run test
 
+      - name: Prepare verified yt-dlp sidecar
+        env:
+          TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
+        run: bun run engine:prepare-sidecar
+
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
 
