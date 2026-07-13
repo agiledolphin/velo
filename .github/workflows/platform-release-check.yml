@@ -76,7 +76,8 @@ jobs:
         run: |
           package=$(find src-tauri/target/${{ matrix.target }}/release/bundle/deb -name '*.deb' -print -quit)
           test -n "$package"
-          dpkg-deb --contents "$package" | grep -q '/yt-dlp$'
+          dpkg-deb --contents "$package" > package-contents.txt
+          grep -q '/yt-dlp$' package-contents.txt
 
       - name: Verify Windows installer contains yt-dlp
         if: runner.os == 'Windows'
