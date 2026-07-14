@@ -53,11 +53,11 @@ describe("Tauri security policy", () => {
     );
   });
 
-  it("grants only the save-dialog permission needed by the download flow", async () => {
+  it("grants only the file dialogs used by downloads and Cookie import", async () => {
     const { permissions } = await loadDefaultCapability();
 
     expect(permissions).toContain("dialog:allow-save");
+    expect(permissions).toContain("dialog:allow-open");
     expect(permissions).not.toContain("dialog:default");
-    expect(permissions).not.toContain("dialog:allow-open");
   });
 });
