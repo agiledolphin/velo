@@ -42,6 +42,35 @@ pub struct DownloadTask {
     pub media_title: String,
     pub format_id: String,
     pub destination_path: String,
+    pub output_extension: String,
+    pub has_video: bool,
+    pub has_audio: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadStreams {
+    AudioVideo,
+    VideoOnly,
+    AudioOnly,
+}
+
+impl DownloadStreams {
+    pub fn from_flags(has_video: bool, has_audio: bool) -> Result<Self, DownloadModelError> {
+        match (has_video, has_audio) {
+            (true, true) => Ok(Self::AudioVideo),
+            (true, false) => Ok(Self::VideoOnly),
+            (false, true) => Ok(Self::AudioOnly),
+            (false, false) => Err(DownloadModelError::StreamFlags),
+        }
+    }
+
+    fn flags(self) -> (bool, bool) {
+        match self {
+            Self::AudioVideo => (true, true),
+            Self::VideoOnly => (true, false),
+            Self::AudioOnly => (false, true),
+        }
+    }
 }
 
 impl DownloadTask {
@@ -52,6 +81,7 @@ impl DownloadTask {
         format_id: impl Into<String>,
         destination_path: impl Into<String>,
         expected_extension: &str,
+        streams: DownloadStreams,
     ) -> Result<Self, DownloadModelError> {
         let source_url = source_url.into();
         let parsed_url = Url::parse(&source_url).map_err(|_| DownloadModelError::SourceUrl)?;
@@ -69,8 +99,11 @@ impl DownloadTask {
             return Err(DownloadModelError::FormatId);
         }
 
+        let output_extension =
+            normalize_extension(expected_extension).ok_or(DownloadModelError::ExpectedExtension)?;
         let destination_path = destination_path.into();
-        validate_destination_path(&destination_path, expected_extension)?;
+        validate_destination_path(&destination_path, &output_extension)?;
+        let (has_video, has_audio) = streams.flags();
 
         Ok(Self {
             id,
@@ -78,6 +111,9 @@ impl DownloadTask {
             media_title,
             format_id,
             destination_path,
+            output_extension,
+            has_video,
+            has_audio,
         })
     }
 }
@@ -193,6 +229,7 @@ pub enum DownloadModelError {
     DestinationPath,
     DestinationExtension,
     ExpectedExtension,
+    StreamFlags,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -284,11 +321,15 @@ mod tests {
                 .join("Example video.mp4")
                 .to_string_lossy(),
             "mp4",
+            DownloadStreams::VideoOnly,
         )
         .expect("download task should be valid");
 
         assert_eq!(task.source_url, "https://video.example/watch/1");
         assert_eq!(task.format_id, "1080p-mp4");
+        assert_eq!(task.output_extension, "mp4");
+        assert!(task.has_video);
+        assert!(!task.has_audio);
         assert!(task.destination_path.ends_with("Example video.mp4"));
     }
 
@@ -306,6 +347,7 @@ mod tests {
                 "format",
                 std::env::temp_dir().join("video.mp4").to_string_lossy(),
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::SourceUrl)
         );
@@ -317,6 +359,7 @@ mod tests {
                 "format",
                 std::env::temp_dir().join("video.mp4").to_string_lossy(),
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::MediaTitle)
         );
@@ -328,8 +371,13 @@ mod tests {
                 " ",
                 std::env::temp_dir().join("video.mp4").to_string_lossy(),
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::FormatId)
+        );
+        assert_eq!(
+            DownloadStreams::from_flags(false, false),
+            Err(DownloadModelError::StreamFlags)
         );
     }
 
@@ -358,6 +406,7 @@ mod tests {
                 "format",
                 "video.mp4",
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::DestinationPath)
         );
@@ -369,6 +418,7 @@ mod tests {
                 "format",
                 reserved,
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::DestinationPath)
         );
@@ -380,6 +430,7 @@ mod tests {
                 "format",
                 wrong_extension,
                 "mp4",
+                DownloadStreams::VideoOnly,
             ),
             Err(DownloadModelError::DestinationExtension)
         );

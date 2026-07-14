@@ -10,6 +10,7 @@ interface TauriConfig {
   };
   bundle: {
     externalBin: string[];
+    resources: string[];
   };
 }
 
@@ -46,7 +47,11 @@ describe("Tauri sidecar bundle configuration", () => {
 
     expect(config.build.beforeDevCommand).toContain("engine:prepare-sidecar");
     expect(config.build.beforeBuildCommand).toContain("engine:prepare-sidecar");
-    expect(config.bundle.externalBin).toEqual(["binaries/yt-dlp"]);
+    expect(config.bundle.externalBin).toEqual([
+      "binaries/yt-dlp",
+      "binaries/ffmpeg",
+    ]);
+    expect(config.bundle.resources).toContain("resources/THIRD_PARTY_NOTICES.md");
   });
 
   it("builds and inspects native Windows and Linux packages in CI", async () => {
@@ -61,6 +66,8 @@ describe("Tauri sidecar bundle configuration", () => {
     );
     expect(workflow).toContain("dpkg-deb --contents");
     expect(workflow).toContain("7z l");
+    expect(workflow).toContain("ffmpeg.exe");
+    expect(workflow).toContain("grep -q '/ffmpeg$'");
     expect(workflow).toContain("actions/upload-artifact@v7");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain('      - "v*"');

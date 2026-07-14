@@ -23,8 +23,14 @@ pub trait DownloadEngine: Send + Sync + 'static {
         &'a self,
         task: &'a DownloadTask,
         cancellation: watch::Receiver<bool>,
-        progress: mpsc::UnboundedSender<DownloadProgress>,
+        updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
     ) -> DownloadFuture<'a>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DownloadEngineUpdate {
+    Progress(DownloadProgress),
+    Processing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,23 +114,28 @@ impl DownloadCoordinator {
         sequence += 1;
         emit(event(&task.id, sequence, DownloadEventPayload::Started));
 
-        let (progress_sender, mut progress_receiver) = mpsc::unbounded_channel();
+        let (update_sender, mut update_receiver) = mpsc::unbounded_channel();
         let download = self
             .inner
             .engine
-            .download(&task, run.cancellation, progress_sender);
+            .download(&task, run.cancellation, update_sender);
         tokio::pin!(download);
+        let mut updates_open = true;
 
         let payload = loop {
             tokio::select! {
-                progress = progress_receiver.recv() => {
-                    if let Some(progress) = progress {
+                update = update_receiver.recv(), if updates_open => {
+                    if let Some(update) = update {
                         sequence += 1;
-                        emit(event(
-                            &task.id,
-                            sequence,
-                            DownloadEventPayload::Progress { progress },
-                        ));
+                        let payload = match update {
+                            DownloadEngineUpdate::Progress(progress) => {
+                                DownloadEventPayload::Progress { progress }
+                            }
+                            DownloadEngineUpdate::Processing => DownloadEventPayload::Processing,
+                        };
+                        emit(event(&task.id, sequence, payload));
+                    } else {
+                        updates_open = false;
                     }
                 }
                 result = &mut download => {
@@ -169,6 +180,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+    use crate::domain::DownloadStreams;
 
     struct StubEngine {
         outcome: DownloadOutcome,
@@ -179,15 +191,15 @@ mod tests {
             &'a self,
             _task: &'a DownloadTask,
             _cancellation: watch::Receiver<bool>,
-            progress: mpsc::UnboundedSender<DownloadProgress>,
+            updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
         ) -> DownloadFuture<'a> {
             Box::pin(async move {
-                let _ = progress.send(DownloadProgress {
+                let _ = updates.send(DownloadEngineUpdate::Progress(DownloadProgress {
                     downloaded_bytes: 50,
                     total_bytes: Some(100),
                     speed_bytes_per_second: Some(25),
                     eta_seconds: Some(2),
-                });
+                }));
                 Ok(self.outcome)
             })
         }
@@ -201,6 +213,7 @@ mod tests {
             "format-1",
             std::env::temp_dir().join("video.mp4").to_string_lossy(),
             "mp4",
+            DownloadStreams::VideoOnly,
         )
         .expect("task should be valid")
     }

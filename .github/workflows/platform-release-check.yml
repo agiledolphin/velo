@@ -12,6 +12,8 @@ on:
       - "scripts/bundle-config.test.ts"
       - "scripts/engine-download.ts"
       - "scripts/engine-manifest.ts"
+      - "scripts/ffmpeg-download.ts"
+      - "scripts/ffmpeg-manifest.ts"
       - "scripts/install-engine.ts"
       - "scripts/prepare-sidecar.ts"
       - "scripts/verify-engine.ts"
@@ -77,7 +79,7 @@ jobs:
       - name: Run frontend and configuration tests
         run: bun run test
 
-      - name: Prepare verified yt-dlp sidecar
+      - name: Prepare verified media sidecars
         env:
           TAURI_ENV_TARGET_TRIPLE: ${{ matrix.target }}
         run: bun run engine:prepare-sidecar
@@ -91,7 +93,7 @@ jobs:
       - name: Build native application package
         run: bun run tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
-      - name: Verify Linux package contains yt-dlp
+      - name: Verify Linux package contains media sidecars
         if: runner.os == 'Linux'
         shell: bash
         run: |
@@ -99,8 +101,9 @@ jobs:
           test -n "$package"
           dpkg-deb --contents "$package" > package-contents.txt
           grep -q '/yt-dlp$' package-contents.txt
+          grep -q '/ffmpeg$' package-contents.txt
 
-      - name: Verify Windows installer contains yt-dlp
+      - name: Verify Windows installer contains media sidecars
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -109,6 +112,7 @@ jobs:
           $listing = & 7z l $package.FullName
           if ($LASTEXITCODE -ne 0) { throw "Unable to inspect NSIS installer" }
           if (-not ($listing | Select-String -SimpleMatch "yt-dlp.exe")) { throw "yt-dlp.exe is missing from NSIS installer" }
+          if (-not ($listing | Select-String -SimpleMatch "ffmpeg.exe")) { throw "ffmpeg.exe is missing from NSIS installer" }
 
       - uses: actions/upload-artifact@v7
         with:

@@ -260,7 +260,7 @@ function MediaResult({
     setPrepareError(null);
     onBusyChange(true);
     try {
-      await startDownload(preparedTask, selectedFormat.container);
+      await startDownload(preparedTask);
     } catch (error) {
       activeTask.current = null;
       onBusyChange(false);

@@ -68,7 +68,8 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/yt-dlp"],
+    "externalBin": ["binaries/yt-dlp", "binaries/ffmpeg"],
+    "resources": ["resources/THIRD_PARTY_NOTICES.md"],
     "category": "Utility",
     "shortDescription": "轻取流光，留住此刻。",
     "longDescription": "Velo / 微落是一款简洁的桌面视频保存工具。"

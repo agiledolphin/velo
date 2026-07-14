@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { downloadEngineAsset } from "./engine-download";
+import { downloadFfmpegAsset } from "./ffmpeg-download";
+import {
+  assertFfmpegBinaryChecksum,
+  ffmpegSidecarFileName,
+  resolveFfmpegAssetForTarget,
+} from "./ffmpeg-manifest";
 import {
   YT_DLP_VERSION,
   assertEngineChecksum,
@@ -42,6 +48,11 @@ async function localEngineBytes(expectedChecksum: string) {
 
 async function main() {
   const target = await targetTriple();
+  await prepareYtDlp(target);
+  await prepareFfmpeg(target);
+}
+
+async function prepareYtDlp(target: string) {
   const asset = resolveEngineAssetForTarget(target);
   const destination = join(sidecarDirectory, sidecarFileName(target, asset));
   const temporary = `${destination}.${process.pid}.tmp`;
@@ -70,7 +81,34 @@ async function main() {
   console.log(`yt-dlp ${YT_DLP_VERSION} sidecar 已准备：${destination}`);
 }
 
+async function prepareFfmpeg(target: string) {
+  const asset = resolveFfmpegAssetForTarget(target);
+  const destination = join(sidecarDirectory, ffmpegSidecarFileName(target, asset));
+  const temporary = `${destination}.${process.pid}.tmp`;
+
+  await mkdir(sidecarDirectory, { recursive: true });
+  try {
+    const existing = new Uint8Array(await readFile(destination));
+    assertFfmpegBinaryChecksum(existing, asset);
+    console.log(`FFmpeg ${asset.version} sidecar 已就绪：${destination}`);
+    return;
+  } catch {
+    await rm(destination, { force: true });
+  }
+
+  const bytes = await downloadFfmpegAsset(asset);
+  assertFfmpegBinaryChecksum(bytes, asset);
+  await rm(temporary, { force: true });
+  try {
+    await writeFile(temporary, bytes, { mode: 0o755, flag: "wx" });
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  console.log(`FFmpeg ${asset.version} sidecar 已准备：${destination}`);
+}
+
 main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "yt-dlp sidecar 准备失败");
+  console.error(error instanceof Error ? error.message : "媒体 sidecar 准备失败");
   process.exitCode = 1;
 });

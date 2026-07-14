@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsString,
     path::{Path, PathBuf},
     process::Stdio,
@@ -13,27 +14,77 @@ use tokio::{
 };
 
 use crate::{
-    application::{DownloadEngine, DownloadFuture, DownloadOutcome},
+    application::{DownloadEngine, DownloadEngineUpdate, DownloadFuture, DownloadOutcome},
     domain::{DownloadFailure, DownloadProgress, DownloadTask},
 };
 
 const PROGRESS_PREFIX: &str = "VELO_PROGRESS:";
+const PROCESSING_MARKER: &str = "VELO_PROCESSING";
 const MAX_STDOUT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 1024 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 
 pub struct YtDlpDownloader {
     executable: PathBuf,
+    ffmpeg: PathBuf,
+}
+
+pub fn configured_ffmpeg_path() -> PathBuf {
+    if let Some(path) = env::var_os("VELO_FFMPEG_PATH").map(PathBuf::from)
+        && path.is_absolute()
+    {
+        return path;
+    }
+
+    let binary_name = if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    };
+    if let Ok(current_executable) = env::current_exe()
+        && let Some(directory) = current_executable.parent()
+    {
+        let sibling = directory.join(binary_name);
+        if sibling.is_file() {
+            return sibling;
+        }
+    }
+
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("binaries")
+        .join(local_ffmpeg_sidecar_name())
+}
+
+fn local_ffmpeg_sidecar_name() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "ffmpeg-aarch64-apple-darwin",
+        ("macos", "x86_64") => "ffmpeg-x86_64-apple-darwin",
+        ("linux", "aarch64") => "ffmpeg-aarch64-unknown-linux-gnu",
+        ("linux", "x86_64") => "ffmpeg-x86_64-unknown-linux-gnu",
+        ("windows", "aarch64") => "ffmpeg-aarch64-pc-windows-msvc.exe",
+        ("windows", "x86_64") => "ffmpeg-x86_64-pc-windows-msvc.exe",
+        _ => binary_name_for_unsupported_target(),
+    }
+}
+
+const fn binary_name_for_unsupported_target() -> &'static str {
+    if cfg!(windows) {
+        "ffmpeg.exe"
+    } else {
+        "ffmpeg"
+    }
 }
 
 impl YtDlpDownloader {
-    pub fn new(executable: impl Into<PathBuf>) -> Self {
+    pub fn new(executable: impl Into<PathBuf>, ffmpeg: impl Into<PathBuf>) -> Self {
         let executable = executable.into();
+        let ffmpeg = ffmpeg.into();
         assert!(
             executable.is_absolute(),
             "download executable path must be absolute"
         );
-        Self { executable }
+        assert!(ffmpeg.is_absolute(), "FFmpeg path must be absolute");
+        Self { executable, ffmpeg }
     }
 }
 
@@ -42,9 +93,9 @@ impl DownloadEngine for YtDlpDownloader {
         &'a self,
         task: &'a DownloadTask,
         cancellation: watch::Receiver<bool>,
-        progress: mpsc::UnboundedSender<DownloadProgress>,
+        updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
     ) -> DownloadFuture<'a> {
-        Box::pin(async move { self.run(task, cancellation, progress).await })
+        Box::pin(async move { self.run(task, cancellation, updates).await })
     }
 }
 
@@ -53,11 +104,11 @@ impl YtDlpDownloader {
         &self,
         task: &DownloadTask,
         mut cancellation: watch::Receiver<bool>,
-        progress: mpsc::UnboundedSender<DownloadProgress>,
+        updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
     ) -> Result<DownloadOutcome, DownloadFailure> {
         let mut command = Command::new(&self.executable);
         command
-            .args(download_arguments(task))
+            .args(download_arguments(task, &self.ffmpeg))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -68,7 +119,7 @@ impl YtDlpDownloader {
             .map_err(|_| DownloadFailure::engine_unavailable())?;
         let stdout = child.stdout.take().ok_or_else(DownloadFailure::failed)?;
         let stderr = child.stderr.take().ok_or_else(DownloadFailure::failed)?;
-        let stdout_task = tokio::spawn(read_progress(stdout, progress));
+        let stdout_task = tokio::spawn(read_progress(stdout, updates));
         let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR_BYTES));
 
         let status = tokio::select! {
@@ -93,8 +144,13 @@ impl YtDlpDownloader {
     }
 }
 
-fn download_arguments(task: &DownloadTask) -> Vec<OsString> {
-    [
+fn download_arguments(task: &DownloadTask, ffmpeg: &Path) -> Vec<OsString> {
+    let format_selector = if task.has_video && !task.has_audio {
+        format!("{}+bestaudio/{}", task.format_id, task.format_id)
+    } else {
+        task.format_id.clone()
+    };
+    let mut arguments = [
         "--ignore-config",
         "--no-plugin-dirs",
         "--no-js-runtimes",
@@ -114,21 +170,32 @@ fn download_arguments(task: &DownloadTask) -> Vec<OsString> {
         "0.25",
         "--progress-template",
         "download:VELO_PROGRESS:%(progress)j",
+        "--progress-template",
+        "postprocess:VELO_PROCESSING",
+        "--ffmpeg-location",
+    ]
+    .into_iter()
+    .map(OsString::from)
+    .collect::<Vec<_>>();
+    arguments.push(ffmpeg.as_os_str().to_owned());
+    for value in [
+        "--merge-output-format",
+        task.output_extension.as_str(),
         "--format",
-        task.format_id.as_str(),
+        format_selector.as_str(),
         "--output",
         task.destination_path.as_str(),
         "--",
         task.source_url.as_str(),
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect()
+    ] {
+        arguments.push(OsString::from(value));
+    }
+    arguments
 }
 
 async fn read_progress(
     reader: impl AsyncRead + Unpin,
-    progress: mpsc::UnboundedSender<DownloadProgress>,
+    updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
 ) -> Result<(), DownloadFailure> {
     let mut reader = BufReader::new(reader);
     let mut line = Vec::new();
@@ -150,8 +217,8 @@ async fn read_progress(
             continue;
         }
 
-        if let Some(parsed) = parse_progress_line(&String::from_utf8_lossy(&line)) {
-            let _ = progress.send(parsed);
+        if let Some(parsed) = parse_download_update(&String::from_utf8_lossy(&line)) {
+            let _ = updates.send(parsed);
         }
     }
 
@@ -205,15 +272,19 @@ struct RawProgress {
     eta: Option<f64>,
 }
 
-fn parse_progress_line(line: &str) -> Option<DownloadProgress> {
-    let payload = line.trim().strip_prefix(PROGRESS_PREFIX)?;
+fn parse_download_update(line: &str) -> Option<DownloadEngineUpdate> {
+    let line = line.trim();
+    if line == PROCESSING_MARKER {
+        return Some(DownloadEngineUpdate::Processing);
+    }
+    let payload = line.strip_prefix(PROGRESS_PREFIX)?;
     let raw: RawProgress = serde_json::from_str(payload).ok()?;
-    Some(DownloadProgress {
+    Some(DownloadEngineUpdate::Progress(DownloadProgress {
         downloaded_bytes: finite_u64(raw.downloaded_bytes).unwrap_or(0),
         total_bytes: finite_u64(raw.total_bytes.or(raw.total_bytes_estimate)),
         speed_bytes_per_second: finite_u64(raw.speed),
         eta_seconds: finite_u64(raw.eta),
-    })
+    }))
 }
 
 fn finite_u64(value: Option<f64>) -> Option<u64> {
@@ -225,7 +296,7 @@ fn finite_u64(value: Option<f64>) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DownloadTaskId;
+    use crate::domain::{DownloadStreams, DownloadTaskId};
 
     fn task() -> DownloadTask {
         DownloadTask::new(
@@ -235,13 +306,14 @@ mod tests {
             "137/mp4",
             std::env::temp_dir().join("video.mp4").to_string_lossy(),
             "mp4",
+            DownloadStreams::VideoOnly,
         )
         .expect("task should be valid")
     }
 
     #[test]
     fn uses_a_fixed_download_argument_contract() {
-        let arguments = download_arguments(&task());
+        let arguments = download_arguments(&task(), Path::new("/trusted/ffmpeg"));
         let strings = arguments
             .iter()
             .map(|value| value.to_string_lossy())
@@ -250,6 +322,13 @@ mod tests {
         assert!(strings.iter().any(|value| value == "--ignore-config"));
         assert!(strings.iter().any(|value| value == "--no-overwrites"));
         assert!(strings.iter().any(|value| value == "--no-exec"));
+        assert!(strings.iter().any(|value| value == "/trusted/ffmpeg"));
+        assert!(
+            strings
+                .iter()
+                .any(|value| value == "137/mp4+bestaudio/137/mp4")
+        );
+        assert!(strings.iter().any(|value| value == "mp4"));
         assert_eq!(strings[strings.len() - 2], "--");
         assert_eq!(
             strings.last().expect("URL"),
@@ -258,17 +337,38 @@ mod tests {
     }
 
     #[test]
+    fn keeps_combined_formats_as_a_single_selection() {
+        let mut task = task();
+        task.has_audio = true;
+        let arguments = download_arguments(&task, Path::new("/trusted/ffmpeg"));
+        let strings = arguments
+            .iter()
+            .map(|value| value.to_string_lossy())
+            .collect::<Vec<_>>();
+
+        assert!(strings.iter().any(|value| value == "137/mp4"));
+        assert!(!strings.iter().any(|value| value.contains("+bestaudio")));
+    }
+
+    #[test]
     fn parses_machine_readable_progress() {
-        let progress = parse_progress_line(
+        let update = parse_download_update(
             r#"VELO_PROGRESS:{"downloaded_bytes":512,"total_bytes":1024,"total_bytes_estimate":null,"speed":256.4,"eta":2}"#,
         )
         .expect("progress should parse");
+        let DownloadEngineUpdate::Progress(progress) = update else {
+            panic!("expected a progress update");
+        };
 
         assert_eq!(progress.downloaded_bytes, 512);
         assert_eq!(progress.total_bytes, Some(1024));
         assert_eq!(progress.speed_bytes_per_second, Some(256));
         assert_eq!(progress.eta_seconds, Some(2));
-        assert!(parse_progress_line("WARNING: ignored").is_none());
+        assert!(parse_download_update("WARNING: ignored").is_none());
+        assert_eq!(
+            parse_download_update("VELO_PROCESSING"),
+            Some(DownloadEngineUpdate::Processing)
+        );
     }
 
     #[tokio::test]
@@ -291,11 +391,15 @@ mod tests {
             format_id,
             destination.to_string_lossy(),
             "mp4",
+            DownloadStreams::VideoOnly,
         )
         .expect("integration task should be valid");
         let (_cancellation, cancellation_receiver) = watch::channel(false);
         let (progress_sender, mut progress_receiver) = mpsc::unbounded_channel();
-        let downloader = YtDlpDownloader::new(crate::infrastructure::configured_yt_dlp_path());
+        let downloader = YtDlpDownloader::new(
+            crate::infrastructure::configured_yt_dlp_path(),
+            configured_ffmpeg_path(),
+        );
 
         let outcome = downloader
             .run(&task, cancellation_receiver, progress_sender)
@@ -305,6 +409,29 @@ mod tests {
         assert_eq!(outcome, DownloadOutcome::Completed);
         assert!(destination.is_file());
         assert!(progress_receiver.try_recv().is_ok());
+        let media_check = Command::new(configured_ffmpeg_path())
+            .args([
+                "-v",
+                "error",
+                "-i",
+                destination.to_string_lossy().as_ref(),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0",
+                "-t",
+                "0.1",
+                "-f",
+                "null",
+                "-",
+            ])
+            .status()
+            .await
+            .expect("FFmpeg should inspect the downloaded media");
+        assert!(
+            media_check.success(),
+            "output should contain video and audio"
+        );
         std::fs::remove_file(destination).expect("integration output should be removable");
     }
 
@@ -329,11 +456,15 @@ mod tests {
             format_id,
             destination.to_string_lossy(),
             "mp4",
+            DownloadStreams::VideoOnly,
         )
         .expect("integration task should be valid");
         let (cancellation, cancellation_receiver) = watch::channel(false);
         let (progress_sender, mut progress_receiver) = mpsc::unbounded_channel();
-        let downloader = YtDlpDownloader::new(crate::infrastructure::configured_yt_dlp_path());
+        let downloader = YtDlpDownloader::new(
+            crate::infrastructure::configured_yt_dlp_path(),
+            configured_ffmpeg_path(),
+        );
         let download = downloader.run(&task, cancellation_receiver, progress_sender);
         tokio::pin!(download);
 

@@ -5,7 +5,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::{
     application::{DownloadCoordinator, StartDownloadError},
-    domain::{DownloadModelError, DownloadTask, DownloadTaskId, suggested_file_name},
+    domain::{
+        DownloadModelError, DownloadStreams, DownloadTask, DownloadTaskId, suggested_file_name,
+    },
 };
 
 const DOWNLOAD_EVENT_NAME: &str = "download-event";
@@ -41,7 +43,8 @@ impl From<DownloadModelError> for PrepareDownloadError {
             DownloadModelError::TaskId
             | DownloadModelError::SourceUrl
             | DownloadModelError::MediaTitle
-            | DownloadModelError::FormatId => Self {
+            | DownloadModelError::FormatId
+            | DownloadModelError::StreamFlags => Self {
                 code: "invalid_download_request",
                 message: "下载请求无效，请重新解析后再试。",
             },
@@ -75,6 +78,7 @@ pub fn suggest_download_file_name(title: String, extension: String) -> DownloadF
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_download_task(
     task_id: String,
     source_url: String,
@@ -82,8 +86,11 @@ pub fn prepare_download_task(
     format_id: String,
     destination_path: String,
     expected_extension: String,
+    has_video: bool,
+    has_audio: bool,
 ) -> Result<DownloadTask, PrepareDownloadError> {
     let task_id = DownloadTaskId::new(task_id)?;
+    let streams = DownloadStreams::from_flags(has_video, has_audio)?;
     DownloadTask::new(
         task_id,
         source_url,
@@ -91,6 +98,7 @@ pub fn prepare_download_task(
         format_id,
         destination_path,
         &expected_extension,
+        streams,
     )
     .map_err(Into::into)
 }
@@ -104,9 +112,12 @@ pub fn start_download(
     format_id: String,
     destination_path: String,
     expected_extension: String,
+    has_video: bool,
+    has_audio: bool,
     app: AppHandle,
     coordinator: State<'_, DownloadCoordinator>,
 ) -> Result<DownloadTask, PrepareDownloadError> {
+    let streams = DownloadStreams::from_flags(has_video, has_audio)?;
     let task = DownloadTask::new(
         DownloadTaskId::new(task_id)?,
         source_url,
@@ -114,6 +125,7 @@ pub fn start_download(
         format_id,
         destination_path,
         &expected_extension,
+        streams,
     )?;
     if Path::new(&task.destination_path).exists() {
         return Err(PrepareDownloadError {
@@ -154,6 +166,8 @@ mod tests {
             "format".into(),
             "relative/private/path.mp4".into(),
             "mp4".into(),
+            true,
+            false,
         )
         .expect_err("relative path should fail");
 

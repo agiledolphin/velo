@@ -144,6 +144,8 @@ export async function chooseDownloadTarget(
       formatId: format.id,
       destinationPath,
       expectedExtension: suggestion.extension,
+      hasVideo: format.hasVideo,
+      hasAudio: format.hasAudio,
     });
   } catch (error) {
     if (isInspectFailure(error)) {
@@ -163,7 +165,6 @@ export async function fetchThumbnailDataUrl(url: string): Promise<string> {
 
 export async function startDownload(
   task: DownloadTask,
-  expectedExtension: string,
 ): Promise<DownloadTask> {
   try {
     return await invoke<DownloadTask>("start_download", {
@@ -172,7 +173,9 @@ export async function startDownload(
       mediaTitle: task.mediaTitle,
       formatId: task.formatId,
       destinationPath: task.destinationPath,
-      expectedExtension,
+      expectedExtension: task.outputExtension,
+      hasVideo: task.hasVideo,
+      hasAudio: task.hasAudio,
     });
   } catch (error) {
     if (isInspectFailure(error)) throw new Error(error.message);

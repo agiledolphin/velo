@@ -29,6 +29,9 @@ export interface DownloadTask {
   mediaTitle: string;
   formatId: string;
   destinationPath: string;
+  outputExtension: string;
+  hasVideo: boolean;
+  hasAudio: boolean;
 }
 
 export interface DownloadProgress {
