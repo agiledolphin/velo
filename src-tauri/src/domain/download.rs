@@ -277,6 +277,34 @@ impl DownloadFailure {
             message: "下载引擎返回了过多诊断信息，任务已停止。".into(),
         }
     }
+
+    pub fn disk_full() -> Self {
+        Self {
+            code: "download_disk_full".into(),
+            message: "保存磁盘空间不足，请清理空间或选择其他位置。".into(),
+        }
+    }
+
+    pub fn permission_denied() -> Self {
+        Self {
+            code: "download_permission_denied".into(),
+            message: "没有权限写入所选位置，请选择其他文件夹。".into(),
+        }
+    }
+
+    pub fn destination_unavailable() -> Self {
+        Self {
+            code: "download_destination_unavailable".into(),
+            message: "无法写入或替换目标文件，请确认文件未被其他程序占用。".into(),
+        }
+    }
+
+    pub fn cleanup_failed() -> Self {
+        Self {
+            code: "download_cleanup_failed".into(),
+            message: "任务已停止，但临时文件清理失败，请检查保存目录。".into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

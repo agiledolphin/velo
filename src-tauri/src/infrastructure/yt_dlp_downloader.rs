@@ -7,6 +7,7 @@ use std::{
 
 use serde::Deserialize;
 use tokio::{
+    fs,
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
     process::Command,
     sync::{mpsc, watch},
@@ -120,12 +121,41 @@ impl YtDlpDownloader {
     async fn run(
         &self,
         task: &DownloadTask,
+        cancellation: watch::Receiver<bool>,
+        updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
+    ) -> Result<DownloadOutcome, DownloadFailure> {
+        let staging = DownloadStaging::create(task).await?;
+        let result = self
+            .run_staged(task, &staging.output, cancellation, updates)
+            .await;
+        match result {
+            Ok(DownloadOutcome::Completed) => staging.commit().await,
+            Ok(DownloadOutcome::Cancelled) => {
+                staging.cleanup().await?;
+                Ok(DownloadOutcome::Cancelled)
+            }
+            Err(error) => match staging.cleanup().await {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(cleanup_error),
+            },
+        }
+    }
+
+    async fn run_staged(
+        &self,
+        task: &DownloadTask,
+        output_path: &Path,
         mut cancellation: watch::Receiver<bool>,
         updates: mpsc::UnboundedSender<DownloadEngineUpdate>,
     ) -> Result<DownloadOutcome, DownloadFailure> {
         let mut command = Command::new(&self.executable);
         command
-            .args(download_arguments(task, &self.ffmpeg, &self.options))
+            .args(download_arguments(
+                task,
+                output_path,
+                &self.ffmpeg,
+                &self.options,
+            ))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -151,9 +181,12 @@ impl YtDlpDownloader {
         let progress_result = stdout_task.await.map_err(|_| DownloadFailure::failed())?;
         let stderr_result = stderr_task.await.map_err(|_| DownloadFailure::failed())?;
         progress_result?;
-        stderr_result?;
+        let stderr = stderr_result?;
 
-        if !status.success() || !Path::new(&task.destination_path).is_file() {
+        if !status.success() {
+            return Err(classify_download_failure(&stderr));
+        }
+        if !output_path.is_file() {
             return Err(DownloadFailure::failed());
         }
 
@@ -161,7 +194,12 @@ impl YtDlpDownloader {
     }
 }
 
-fn download_arguments(task: &DownloadTask, ffmpeg: &Path, options: &YtDlpOptions) -> Vec<OsString> {
+fn download_arguments(
+    task: &DownloadTask,
+    output_path: &Path,
+    ffmpeg: &Path,
+    options: &YtDlpOptions,
+) -> Vec<OsString> {
     let format_selector = if task.has_video && !task.has_audio {
         format!("{}+bestaudio/{}", task.format_id, task.format_id)
     } else {
@@ -200,12 +238,12 @@ fn download_arguments(task: &DownloadTask, ffmpeg: &Path, options: &YtDlpOptions
         "--format",
         format_selector.as_str(),
         "--output",
-        task.destination_path.as_str(),
-        "--",
-        task.source_url.as_str(),
     ] {
         arguments.push(OsString::from(value));
     }
+    arguments.push(output_path.as_os_str().to_owned());
+    arguments.push(OsString::from("--"));
+    arguments.push(OsString::from(task.source_url.as_str()));
     arguments
 }
 
@@ -245,10 +283,14 @@ async fn read_progress(
     }
 }
 
-async fn read_bounded(reader: impl AsyncRead + Unpin, limit: usize) -> Result<(), DownloadFailure> {
+async fn read_bounded(
+    reader: impl AsyncRead + Unpin,
+    limit: usize,
+) -> Result<Vec<u8>, DownloadFailure> {
     let mut reader = reader;
     let mut buffer = [0u8; 8 * 1024];
-    let mut total_bytes = 0usize;
+    let mut output = Vec::new();
+    let mut exceeded_limit = false;
 
     loop {
         let count = reader
@@ -258,25 +300,129 @@ async fn read_bounded(reader: impl AsyncRead + Unpin, limit: usize) -> Result<()
         if count == 0 {
             break;
         }
-        total_bytes = total_bytes.saturating_add(count);
+        if output.len().saturating_add(count) <= limit {
+            output.extend_from_slice(&buffer[..count]);
+        } else {
+            exceeded_limit = true;
+        }
     }
 
-    if total_bytes > limit {
+    if exceeded_limit {
         Err(DownloadFailure::output_too_large())
     } else {
-        Ok(())
+        Ok(output)
     }
 }
 
 async fn stop_child(
     child: &mut tokio::process::Child,
     stdout_task: &JoinHandle<Result<(), DownloadFailure>>,
-    stderr_task: &JoinHandle<Result<(), DownloadFailure>>,
+    stderr_task: &JoinHandle<Result<Vec<u8>, DownloadFailure>>,
 ) {
     let _ = child.kill().await;
     let _ = child.wait().await;
     stdout_task.abort();
     stderr_task.abort();
+}
+
+struct DownloadStaging {
+    directory: PathBuf,
+    output: PathBuf,
+    destination: PathBuf,
+}
+
+impl DownloadStaging {
+    async fn create(task: &DownloadTask) -> Result<Self, DownloadFailure> {
+        let destination = PathBuf::from(&task.destination_path);
+        let parent = destination
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .ok_or_else(DownloadFailure::destination_unavailable)?;
+        let file_name = destination
+            .file_name()
+            .ok_or_else(DownloadFailure::destination_unavailable)?;
+        let directory = parent.join(format!(".velo-{}", task.id.as_str()));
+        fs::create_dir(&directory)
+            .await
+            .map_err(map_destination_error)?;
+        let output = directory.join(file_name);
+        Ok(Self {
+            directory,
+            output,
+            destination,
+        })
+    }
+
+    async fn commit(self) -> Result<DownloadOutcome, DownloadFailure> {
+        let backup = self.directory.join("previous-download");
+        let mut has_backup = false;
+        if let Ok(metadata) = fs::metadata(&self.destination).await {
+            if !metadata.is_file() {
+                self.cleanup().await?;
+                return Err(DownloadFailure::destination_unavailable());
+            }
+            fs::rename(&self.destination, &backup)
+                .await
+                .map_err(map_destination_error)?;
+            has_backup = true;
+        }
+
+        if let Err(error) = fs::rename(&self.output, &self.destination).await {
+            if has_backup {
+                let _ = fs::rename(&backup, &self.destination).await;
+            }
+            let _ = self.cleanup().await;
+            return Err(map_destination_error(error));
+        }
+        if has_backup {
+            fs::remove_file(&backup)
+                .await
+                .map_err(|_| DownloadFailure::cleanup_failed())?;
+        }
+        fs::remove_dir(&self.directory)
+            .await
+            .map_err(|_| DownloadFailure::cleanup_failed())?;
+        Ok(DownloadOutcome::Completed)
+    }
+
+    async fn cleanup(&self) -> Result<(), DownloadFailure> {
+        match fs::remove_dir_all(&self.directory).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(DownloadFailure::cleanup_failed()),
+        }
+    }
+}
+
+fn classify_download_failure(stderr: &[u8]) -> DownloadFailure {
+    let message = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if contains_any(
+        &message,
+        &["no space left", "disk full", "not enough space"],
+    ) {
+        DownloadFailure::disk_full()
+    } else if contains_any(
+        &message,
+        &["permission denied", "access is denied", "access denied"],
+    ) {
+        DownloadFailure::permission_denied()
+    } else {
+        DownloadFailure::failed()
+    }
+}
+
+fn map_destination_error(error: std::io::Error) -> DownloadFailure {
+    if matches!(error.raw_os_error(), Some(28 | 39 | 112)) {
+        DownloadFailure::disk_full()
+    } else if error.kind() == std::io::ErrorKind::PermissionDenied {
+        DownloadFailure::permission_denied()
+    } else {
+        DownloadFailure::destination_unavailable()
+    }
+}
+
+fn contains_any(message: &str, patterns: &[&str]) -> bool {
+    patterns.iter().any(|pattern| message.contains(pattern))
 }
 
 #[derive(Deserialize)]
@@ -331,6 +477,7 @@ mod tests {
     fn uses_a_fixed_download_argument_contract() {
         let arguments = download_arguments(
             &task(),
+            Path::new("/trusted/staging/video.mp4"),
             Path::new("/trusted/ffmpeg"),
             &YtDlpOptions::new(configured_deno_path()),
         );
@@ -343,6 +490,11 @@ mod tests {
         assert!(strings.iter().any(|value| value == "--no-overwrites"));
         assert!(strings.iter().any(|value| value == "--no-exec"));
         assert!(strings.iter().any(|value| value == "/trusted/ffmpeg"));
+        assert!(
+            strings
+                .iter()
+                .any(|value| value == "/trusted/staging/video.mp4")
+        );
         assert!(
             strings
                 .iter()
@@ -362,6 +514,7 @@ mod tests {
         task.has_audio = true;
         let arguments = download_arguments(
             &task,
+            Path::new("/trusted/staging/video.mp4"),
             Path::new("/trusted/ffmpeg"),
             &YtDlpOptions::new(configured_deno_path()),
         );
@@ -393,6 +546,98 @@ mod tests {
             parse_download_update("VELO_PROCESSING"),
             Some(DownloadEngineUpdate::Processing)
         );
+    }
+
+    #[test]
+    fn classifies_expected_storage_failures() {
+        assert_eq!(
+            classify_download_failure(b"ERROR: No space left on device").code,
+            "download_disk_full"
+        );
+        assert_eq!(
+            classify_download_failure(b"ERROR: Permission denied").code,
+            "download_permission_denied"
+        );
+        assert_eq!(
+            classify_download_failure(b"ERROR: unavailable").code,
+            "download_failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn stages_then_replaces_an_existing_destination() {
+        let root = unique_test_directory("replace");
+        fs::create_dir(&root)
+            .await
+            .expect("test directory should be created");
+        let destination = root.join("video.mp4");
+        fs::write(&destination, b"old")
+            .await
+            .expect("existing file should be written");
+        let task = task_at(&destination, "replace-task");
+        let staging = DownloadStaging::create(&task)
+            .await
+            .expect("staging should be created");
+        fs::write(&staging.output, b"new")
+            .await
+            .expect("staged file should be written");
+
+        assert_eq!(
+            fs::read(&destination).await.expect("old file remains"),
+            b"old"
+        );
+        assert_eq!(
+            staging.commit().await.expect("commit should succeed"),
+            DownloadOutcome::Completed
+        );
+        assert_eq!(
+            fs::read(&destination).await.expect("new file exists"),
+            b"new"
+        );
+        fs::remove_dir_all(root)
+            .await
+            .expect("test directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn removes_the_whole_staging_directory_after_cancellation() {
+        let root = unique_test_directory("cancel");
+        fs::create_dir(&root)
+            .await
+            .expect("test directory should be created");
+        let task = task_at(&root.join("video.mp4"), "cancel-task");
+        let staging = DownloadStaging::create(&task)
+            .await
+            .expect("staging should be created");
+        fs::write(staging.directory.join("video.mp4.part"), b"partial")
+            .await
+            .expect("partial file should be written");
+        staging.cleanup().await.expect("cleanup should succeed");
+        assert!(!staging.directory.exists());
+        fs::remove_dir_all(root)
+            .await
+            .expect("test directory should be removed");
+    }
+
+    fn task_at(destination: &Path, id: &str) -> DownloadTask {
+        DownloadTask::new(
+            DownloadTaskId::new(id).expect("task ID should be valid"),
+            "https://video.example/watch?v=1",
+            "Title",
+            "137/mp4",
+            destination.to_string_lossy(),
+            "mp4",
+            DownloadStreams::VideoOnly,
+        )
+        .expect("task should be valid")
+    }
+
+    fn unique_test_directory(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        std::env::temp_dir().join(format!("velo-{label}-{}-{nonce}", std::process::id()))
     }
 
     #[tokio::test]
