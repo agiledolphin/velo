@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use application::{AppState, DownloadCoordinator};
 use infrastructure::{
-    RepresentativeFrameGenerator, RestrictedProcessRunner, ThumbnailFetcher, YtDlpDownloader,
-    YtDlpEngine, configured_ffmpeg_path, configured_yt_dlp_path,
+    RepresentativeFrameCache, RepresentativeFrameGenerator, RestrictedProcessRunner,
+    ThumbnailFetcher, YtDlpDownloader, YtDlpEngine, configured_ffmpeg_path, configured_yt_dlp_path,
 };
 
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -21,19 +21,24 @@ const MAX_FRAME_OUTPUT_BYTES: usize = 5 * 1024 * 1024;
 pub fn run() {
     let engine_path = configured_yt_dlp_path();
     let ffmpeg_path = configured_ffmpeg_path();
+    let frame_cache = RepresentativeFrameCache::default();
     let runner = RestrictedProcessRunner::new(
         engine_path.clone(),
         INSPECT_TIMEOUT,
         MAX_ENGINE_OUTPUT_BYTES,
     );
-    let frame_generator = RepresentativeFrameGenerator::new(
+    let frame_generator = RepresentativeFrameGenerator::with_cache(
         RestrictedProcessRunner::new(engine_path.clone(), FRAME_TIMEOUT, MAX_STREAM_OUTPUT_BYTES),
         RestrictedProcessRunner::new(ffmpeg_path.clone(), FRAME_TIMEOUT, MAX_FRAME_OUTPUT_BYTES),
+        frame_cache.clone(),
     );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::new(YtDlpEngine::new(runner)))
+        .manage(AppState::new(YtDlpEngine::with_frame_cache(
+            runner,
+            frame_cache,
+        )))
         .manage(DownloadCoordinator::new(YtDlpDownloader::new(
             engine_path,
             ffmpeg_path,

@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    collections::BTreeMap,
     env,
     ffi::OsString,
     path::{Path, PathBuf},
@@ -14,18 +15,31 @@ use crate::{
     domain::{InspectError, MediaFormat, MediaInfo},
 };
 
-use super::process_runner::{ProcessError, ProcessRunner};
+use super::{
+    RepresentativeFrameCache, StreamReference,
+    process_runner::{ProcessError, ProcessRunner},
+};
 
 const MAX_FORMATS: usize = 24;
 
 pub struct YtDlpEngine {
     runner: Arc<dyn ProcessRunner>,
+    frame_cache: RepresentativeFrameCache,
 }
 
 impl YtDlpEngine {
+    #[cfg(test)]
     pub fn new(runner: impl ProcessRunner) -> Self {
+        Self::with_frame_cache(runner, RepresentativeFrameCache::default())
+    }
+
+    pub fn with_frame_cache(
+        runner: impl ProcessRunner,
+        frame_cache: RepresentativeFrameCache,
+    ) -> Self {
         Self {
             runner: Arc::new(runner),
+            frame_cache,
         }
     }
 }
@@ -45,7 +59,11 @@ impl MediaEngine for YtDlpEngine {
                 return Err(classify_engine_failure(&output.stderr));
             }
 
-            parse_media_info(&output.stdout, &source_url)
+            let (media, stream) = parse_media_info(&output.stdout, &source_url)?;
+            if let Some(stream) = stream {
+                self.frame_cache.insert(&source_url, stream);
+            }
+            Ok(media)
         })
     }
 }
@@ -211,7 +229,10 @@ fn contains_any(message: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|pattern| message.contains(pattern))
 }
 
-fn parse_media_info(bytes: &[u8], source_url: &Url) -> Result<MediaInfo, InspectError> {
+fn parse_media_info(
+    bytes: &[u8],
+    source_url: &Url,
+) -> Result<(MediaInfo, Option<StreamReference>), InspectError> {
     let raw: RawMediaInfo =
         serde_json::from_slice(bytes).map_err(|_| InspectError::invalid_response())?;
     let title =
@@ -220,6 +241,7 @@ fn parse_media_info(bytes: &[u8], source_url: &Url) -> Result<MediaInfo, Inspect
         .or_else(|| source_url.host_str().map(ToOwned::to_owned))
         .ok_or_else(InspectError::invalid_response)?;
     let thumbnail_url = raw.thumbnail.as_deref().and_then(normalized_web_url);
+    let representative_stream = select_representative_stream(&raw.formats);
     let mut formats: Vec<_> = raw
         .formats
         .into_iter()
@@ -232,14 +254,59 @@ fn parse_media_info(bytes: &[u8], source_url: &Url) -> Result<MediaInfo, Inspect
         return Err(InspectError::no_formats());
     }
 
-    Ok(MediaInfo {
-        source_url: source_url.to_string(),
-        title,
-        site,
-        thumbnail_url,
-        duration_seconds: raw.duration.and_then(non_negative_u64),
-        formats,
-    })
+    Ok((
+        MediaInfo {
+            source_url: source_url.to_string(),
+            title,
+            site,
+            thumbnail_url,
+            duration_seconds: raw.duration.and_then(non_negative_u64),
+            formats,
+        },
+        representative_stream,
+    ))
+}
+
+fn select_representative_stream(formats: &[RawMediaFormat]) -> Option<StreamReference> {
+    let mut best_bounded: Option<(u32, StreamReference)> = None;
+    let mut lowest_unbounded: Option<(u32, StreamReference)> = None;
+    let mut unknown_height: Option<StreamReference> = None;
+
+    for format in formats {
+        if !codec_is_present(format.vcodec.as_deref()) {
+            continue;
+        }
+        let Some(url) = format.url.as_deref() else {
+            continue;
+        };
+        let Ok(stream) = StreamReference::new(url, format.http_headers.clone()) else {
+            continue;
+        };
+        match format.height {
+            Some(height) if height <= 480 => {
+                if best_bounded
+                    .as_ref()
+                    .is_none_or(|(current, _)| height > *current)
+                {
+                    best_bounded = Some((height, stream));
+                }
+            }
+            Some(height) => {
+                if lowest_unbounded
+                    .as_ref()
+                    .is_none_or(|(current, _)| height < *current)
+                {
+                    lowest_unbounded = Some((height, stream));
+                }
+            }
+            None => unknown_height = unknown_height.or(Some(stream)),
+        }
+    }
+
+    best_bounded
+        .map(|(_, stream)| stream)
+        .or_else(|| lowest_unbounded.map(|(_, stream)| stream))
+        .or(unknown_height)
 }
 
 fn normalize_format(raw: RawMediaFormat) -> Option<MediaFormat> {
@@ -359,6 +426,9 @@ struct RawMediaFormat {
     filesize_approx: Option<f64>,
     vcodec: Option<String>,
     acodec: Option<String>,
+    url: Option<String>,
+    #[serde(default)]
+    http_headers: BTreeMap<String, String>,
 }
 
 #[cfg(test)]
@@ -417,10 +487,14 @@ mod tests {
 
     #[tokio::test]
     async fn maps_fixture_into_domain_media() {
-        let engine = YtDlpEngine::new(StubRunner::success(FIXTURE));
+        let frame_cache = RepresentativeFrameCache::default();
+        let engine =
+            YtDlpEngine::with_frame_cache(StubRunner::success(FIXTURE), frame_cache.clone());
+        let source =
+            Url::parse("https://video.example/watch?v=42").expect("source URL should parse");
 
         let media = engine
-            .inspect("https://video.example/watch?v=42")
+            .inspect(source.as_str())
             .await
             .expect("fixture should parse");
 
@@ -428,11 +502,37 @@ mod tests {
         assert_eq!(media.site, "video.example");
         assert_eq!(media.duration_seconds, Some(213));
         assert_eq!(media.formats.len(), 3);
+        assert!(frame_cache.get(&source).is_some());
         assert_eq!(media.formats[0].id, "22");
         assert_eq!(media.formats[0].label, "720p · 音视频");
         assert_eq!(media.formats[1].id, "137");
         assert_eq!(media.formats[1].filesize_bytes, Some(86 * 1024 * 1024));
         assert_eq!(media.formats[2].label, "音频");
+    }
+
+    #[test]
+    fn chooses_the_highest_video_stream_within_the_preview_bound() {
+        let video = |height: u32, url: &str| RawMediaFormat {
+            format_id: Some(height.to_string()),
+            ext: Some("mp4".into()),
+            width: Some(height * 16 / 9),
+            height: Some(height),
+            filesize: None,
+            filesize_approx: None,
+            vcodec: Some("avc1".into()),
+            acodec: Some("none".into()),
+            url: Some(url.into()),
+            http_headers: BTreeMap::new(),
+        };
+        let formats = [
+            video(270, "https://cdn.example/270.mp4"),
+            video(480, "https://cdn.example/480.mp4"),
+            video(720, "https://cdn.example/720.mp4"),
+        ];
+
+        let selected = select_representative_stream(&formats)
+            .expect("a bounded representative stream should be selected");
+        assert_eq!(selected.url(), "https://cdn.example/480.mp4");
     }
 
     #[tokio::test]

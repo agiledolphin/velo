@@ -28,7 +28,11 @@
       "height": 720,
       "filesize": 50331648,
       "vcodec": "avc1.64001F",
-      "acodec": "mp4a.40.2"
+      "acodec": "mp4a.40.2",
+      "url": "https://cdn.video.example/video-720.mp4",
+      "http_headers": {
+        "User-Agent": "Velo fixture"
+      }
     },
     {
       "format_id": "137",
@@ -37,7 +41,8 @@
       "height": 1080,
       "filesize_approx": 90177536,
       "vcodec": "avc1.640028",
-      "acodec": "none"
+      "acodec": "none",
+      "url": "https://cdn.video.example/video-1080.mp4"
     }
   ]
 }

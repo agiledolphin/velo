@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, ffi::OsString, sync::Arc};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    ffi::OsString,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -11,10 +16,25 @@ const FRAME_FILTER: &str = "scale=640:-2:force_original_aspect_ratio=decrease";
 const STREAM_TEMPLATE: &str = r#"{"url":%(url)j,"httpHeaders":%(http_headers)j}"#;
 const MAX_HEADER_VALUE_BYTES: usize = 4 * 1024;
 const MAX_HEADERS_BYTES: usize = 16 * 1024;
+const MAX_URL_BYTES: usize = 16 * 1024;
+const MAX_CACHED_STREAMS: usize = 8;
+const STREAM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 pub struct RepresentativeFrameGenerator {
     yt_dlp: Arc<dyn ProcessRunner>,
     ffmpeg: Arc<dyn ProcessRunner>,
+    cache: RepresentativeFrameCache,
+}
+
+#[derive(Clone, Default)]
+pub struct RepresentativeFrameCache {
+    entries: Arc<Mutex<VecDeque<CachedStream>>>,
+}
+
+struct CachedStream {
+    source: String,
+    stream: StreamReference,
+    expires_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -33,10 +53,15 @@ impl RepresentativeFrameError {
 }
 
 impl RepresentativeFrameGenerator {
-    pub fn new(yt_dlp: impl ProcessRunner, ffmpeg: impl ProcessRunner) -> Self {
+    pub fn with_cache(
+        yt_dlp: impl ProcessRunner,
+        ffmpeg: impl ProcessRunner,
+        cache: RepresentativeFrameCache,
+    ) -> Self {
         Self {
             yt_dlp: Arc::new(yt_dlp),
             ffmpeg: Arc::new(ffmpeg),
+            cache,
         }
     }
 
@@ -45,15 +70,22 @@ impl RepresentativeFrameGenerator {
         source: &str,
     ) -> Result<String, RepresentativeFrameError> {
         let source = validated_web_url(source)?;
-        let stream_output = self
-            .yt_dlp
-            .run(&stream_arguments(source.as_str()))
-            .await
-            .map_err(map_process_error)?;
-        if !stream_output.success {
-            return Err(RepresentativeFrameError::unavailable());
-        }
-        let stream = parse_stream_reference(&stream_output.stdout)?;
+        let stream = match self.cache.get(&source) {
+            Some(stream) => stream,
+            None => {
+                let stream_output = self
+                    .yt_dlp
+                    .run(&stream_arguments(source.as_str()))
+                    .await
+                    .map_err(map_process_error)?;
+                if !stream_output.success {
+                    return Err(RepresentativeFrameError::unavailable());
+                }
+                let stream = parse_stream_reference(&stream_output.stdout)?;
+                self.cache.insert(&source, stream.clone());
+                stream
+            }
+        };
         let frame_output = self
             .ffmpeg
             .run(&frame_arguments(&stream))
@@ -67,6 +99,41 @@ impl RepresentativeFrameGenerator {
             "data:image/jpeg;base64,{}",
             STANDARD.encode(frame_output.stdout)
         ))
+    }
+}
+
+impl RepresentativeFrameCache {
+    pub(crate) fn insert(&self, source: &Url, stream: StreamReference) {
+        let now = Instant::now();
+        let mut entries = self.entries();
+        entries.retain(|entry| entry.expires_at > now && entry.source != source.as_str());
+        while entries.len() >= MAX_CACHED_STREAMS {
+            entries.pop_front();
+        }
+        entries.push_back(CachedStream {
+            source: source.to_string(),
+            stream,
+            expires_at: now + STREAM_CACHE_TTL,
+        });
+    }
+
+    pub(crate) fn get(&self, source: &Url) -> Option<StreamReference> {
+        let now = Instant::now();
+        let mut entries = self.entries();
+        entries.retain(|entry| entry.expires_at > now);
+        let index = entries
+            .iter()
+            .position(|entry| entry.source == source.as_str())?;
+        let entry = entries.remove(index)?;
+        let stream = entry.stream.clone();
+        entries.push_back(entry);
+        Some(stream)
+    }
+
+    fn entries(&self) -> std::sync::MutexGuard<'_, VecDeque<CachedStream>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -113,10 +180,10 @@ fn frame_arguments(stream: &StreamReference) -> Vec<OsString> {
     }
 
     for value in [
-        "-i",
-        stream.url.as_str(),
         "-ss",
         "1",
+        "-i",
+        stream.url.as_str(),
         "-map",
         "0:v:0",
         "-an",
@@ -145,21 +212,39 @@ struct RawStreamReference {
     http_headers: BTreeMap<String, String>,
 }
 
-struct StreamReference {
+#[derive(Clone)]
+pub(crate) struct StreamReference {
     url: Url,
     http_headers: BTreeMap<String, String>,
+}
+
+impl StreamReference {
+    pub(crate) fn new(
+        url: &str,
+        http_headers: BTreeMap<String, String>,
+    ) -> Result<Self, RepresentativeFrameError> {
+        Ok(Self {
+            url: validated_web_url(url)?,
+            http_headers: sanitized_headers(http_headers),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn url(&self) -> &str {
+        self.url.as_str()
+    }
 }
 
 fn parse_stream_reference(bytes: &[u8]) -> Result<StreamReference, RepresentativeFrameError> {
     let raw: RawStreamReference =
         serde_json::from_slice(bytes).map_err(|_| RepresentativeFrameError::unavailable())?;
-    Ok(StreamReference {
-        url: validated_web_url(&raw.url)?,
-        http_headers: raw.http_headers,
-    })
+    StreamReference::new(&raw.url, raw.http_headers)
 }
 
 fn validated_web_url(source: &str) -> Result<Url, RepresentativeFrameError> {
+    if source.len() > MAX_URL_BYTES {
+        return Err(RepresentativeFrameError::unavailable());
+    }
     let url = Url::parse(source).map_err(|_| RepresentativeFrameError::unavailable())?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
@@ -171,16 +256,24 @@ fn validated_web_url(source: &str) -> Result<Url, RepresentativeFrameError> {
     Ok(url)
 }
 
+fn sanitized_headers(headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut total_bytes = 0usize;
+    headers
+        .into_iter()
+        .filter(|(name, value)| {
+            if !is_allowed_header(name, value) {
+                return false;
+            }
+            total_bytes = total_bytes.saturating_add(name.len() + value.len() + 4);
+            total_bytes <= MAX_HEADERS_BYTES
+        })
+        .collect()
+}
+
 fn safe_ffmpeg_headers(headers: &BTreeMap<String, String>) -> Option<String> {
     let mut output = String::new();
     for (name, value) in headers {
-        if !matches!(
-            name.to_ascii_lowercase().as_str(),
-            "accept" | "accept-language" | "origin" | "referer" | "user-agent"
-        ) || value.is_empty()
-            || value.len() > MAX_HEADER_VALUE_BYTES
-            || value.contains(['\r', '\n'])
-        {
+        if !is_allowed_header(name, value) {
             continue;
         }
         let line = format!("{name}: {value}\r\n");
@@ -190,6 +283,15 @@ fn safe_ffmpeg_headers(headers: &BTreeMap<String, String>) -> Option<String> {
         output.push_str(&line);
     }
     (!output.is_empty()).then_some(output)
+}
+
+fn is_allowed_header(name: &str, value: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "accept" | "accept-language" | "origin" | "referer" | "user-agent"
+    ) && !value.is_empty()
+        && value.len() <= MAX_HEADER_VALUE_BYTES
+        && !value.contains(['\r', '\n'])
 }
 
 fn is_jpeg(bytes: &[u8]) -> bool {
@@ -202,7 +304,21 @@ fn map_process_error(_error: ProcessError) -> RepresentativeFrameError {
 
 #[cfg(test)]
 mod tests {
+    use std::future::ready;
+
     use super::*;
+    use crate::{
+        application::MediaEngine,
+        infrastructure::{RestrictedProcessRunner, YtDlpEngine, process_runner::ProcessFuture},
+    };
+
+    struct UnavailableRunner;
+
+    impl ProcessRunner for UnavailableRunner {
+        fn run<'a>(&'a self, _arguments: &'a [OsString]) -> ProcessFuture<'a> {
+            Box::pin(ready(Err(ProcessError::SpawnFailed)))
+        }
+    }
 
     #[test]
     fn uses_hardened_stream_and_frame_arguments() {
@@ -230,6 +346,18 @@ mod tests {
         assert!(!headers.contains("Cookie"));
         assert!(frame_arguments.iter().any(|value| value == "1"));
         assert!(frame_arguments.iter().any(|value| value == "pipe:1"));
+        let seek = frame_arguments
+            .iter()
+            .position(|value| value == "-ss")
+            .expect("seek argument should exist");
+        let input = frame_arguments
+            .iter()
+            .position(|value| value == "-i")
+            .expect("input argument should exist");
+        assert!(
+            seek < input,
+            "fast seek should be applied before opening input"
+        );
     }
 
     #[test]
@@ -250,28 +378,74 @@ mod tests {
         assert!(!is_jpeg(b"not-an-image"));
     }
 
+    #[test]
+    fn bounds_refreshes_and_expires_cached_streams() {
+        let cache = RepresentativeFrameCache::default();
+        for index in 0..=MAX_CACHED_STREAMS {
+            let source = Url::parse(&format!("https://video.example/{index}"))
+                .expect("source URL should parse");
+            cache.insert(
+                &source,
+                StreamReference::new("https://cdn.example/video.mp4", BTreeMap::new())
+                    .expect("stream URL should parse"),
+            );
+        }
+        assert_eq!(cache.entries().len(), MAX_CACHED_STREAMS);
+        assert!(
+            cache
+                .get(&Url::parse("https://video.example/0").expect("source URL should parse"))
+                .is_none()
+        );
+
+        let newest = Url::parse(&format!("https://video.example/{MAX_CACHED_STREAMS}"))
+            .expect("source URL should parse");
+        assert!(cache.get(&newest).is_some());
+        cache
+            .entries()
+            .back_mut()
+            .expect("newest cache entry should exist")
+            .expires_at = Instant::now();
+        assert!(cache.get(&newest).is_none());
+    }
+
     #[tokio::test]
     #[ignore = "requires an explicit public video URL and verified yt-dlp/FFmpeg sidecars"]
     async fn generates_a_configured_real_frame() {
         let url = std::env::var("VELO_INTEGRATION_FRAME_URL")
             .expect("VELO_INTEGRATION_FRAME_URL must be set explicitly");
-        let generator = RepresentativeFrameGenerator::new(
-            crate::infrastructure::RestrictedProcessRunner::new(
+        let cache = RepresentativeFrameCache::default();
+        let engine = YtDlpEngine::with_frame_cache(
+            RestrictedProcessRunner::new(
                 crate::infrastructure::configured_yt_dlp_path(),
                 std::time::Duration::from_secs(45),
                 256 * 1024,
             ),
-            crate::infrastructure::RestrictedProcessRunner::new(
+            cache.clone(),
+        );
+        engine
+            .inspect(&url)
+            .await
+            .expect("initial inspection should populate the frame cache");
+
+        let generator = RepresentativeFrameGenerator::with_cache(
+            UnavailableRunner,
+            RestrictedProcessRunner::new(
                 crate::infrastructure::configured_ffmpeg_path(),
                 std::time::Duration::from_secs(45),
                 5 * 1024 * 1024,
             ),
+            cache,
         );
 
+        let started = Instant::now();
         let frame = generator
             .generate_data_url(&url)
             .await
-            .expect("representative frame should be generated");
+            .expect("representative frame should use the cached stream");
+        eprintln!(
+            "cached representative frame generated in {:?}",
+            started.elapsed()
+        );
         assert!(frame.starts_with("data:image/jpeg;base64,"));
         assert!(frame.len() > 1024);
 
