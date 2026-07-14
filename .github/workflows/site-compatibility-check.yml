@@ -37,6 +37,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |

@@ -48,6 +48,8 @@ Tauri 开发与发布构建钩子读取 `TAURI_ENV_TARGET_TRIPLE`，将目标映
 
 当前已验证 Apple Silicon macOS `.app` 内包含正确 SHA-256 且可运行的 yt-dlp。Windows x64 与 Linux x64 已在原生 GitHub 运行器中通过测试、Clippy、Tauri 发布构建、NSIS/DEB sidecar 内容检查和产物上传。
 
+持续集成分为快速验证与发布验证。非文档 push 和 pull request 使用 Ubuntu 运行前端测试与构建、Rust 测试和 Clippy；完整 Windows/Linux 安装包只在版本标签、手动触发或打包关键文件变化时生成。工作流按目标平台复用 Cargo 缓存，并保留并发取消，避免连续提交继续占用旧 runner。
+
 真实站点兼容性使用独立的手动工作流验证。地址只从仓库 Actions Secret 读取，不进入源码、工作流输入或测试输出；同一个忽略型集成测试在 macOS arm64、Windows x64 与 Linux x64 上运行，并只输出规范化站点名、时长和格式数量。测试范围与结果记录在 `docs/site-compatibility.md`。
 
 每次解析固定使用模拟、单视频和单行 JSON 参数，并忽略用户配置、插件目录、外部 JavaScript 运行时、远程组件、缓存与 `exec`。URL 位于参数终止符之后，不能被解释为命令选项。禁用外部 JavaScript 运行时会暂时降低部分站点兼容性，后续仅在有可控打包方案时放开。

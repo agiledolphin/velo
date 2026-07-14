@@ -27,6 +27,11 @@ async function loadPlatformWorkflow(): Promise<string> {
   );
 }
 
+async function loadFastCiWorkflow(): Promise<string> {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  return readFile(resolve(directory, "../.github/workflows/ci.yml"), "utf8");
+}
+
 async function loadCompatibilityWorkflow(): Promise<string> {
   const directory = dirname(fileURLToPath(import.meta.url));
   return readFile(
@@ -57,6 +62,25 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(workflow).toContain("dpkg-deb --contents");
     expect(workflow).toContain("7z l");
     expect(workflow).toContain("actions/upload-artifact@v7");
+    expect(workflow).toContain("workflow_dispatch:");
+    expect(workflow).toContain('      - "v*"');
+    expect(workflow).toContain('      - "src-tauri/tauri.conf.json"');
+    expect(workflow).not.toContain("pull_request:");
+    expect(workflow).toContain("Swatinem/rust-cache@v2");
+  });
+
+  it("runs fast checks for source pushes without building installers", async () => {
+    const workflow = await loadFastCiWorkflow();
+
+    expect(workflow).toContain("pull_request:");
+    expect(workflow).toContain("branches: [main]");
+    expect(workflow).toContain('      - "**/*.md"');
+    expect(workflow).toContain("bun run build");
+    expect(workflow).toContain("cargo test");
+    expect(workflow).toContain("cargo clippy");
+    expect(workflow).toContain("Swatinem/rust-cache@v2");
+    expect(workflow).not.toContain("tauri build");
+    expect(workflow).not.toContain("upload-artifact");
   });
 
   it("runs authorized site checks without storing the URL in the workflow", async () => {
@@ -67,6 +91,7 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(workflow).toContain("ubuntu-latest");
     expect(workflow).toContain("secrets.VELO_INTEGRATION_TEST_URL");
     expect(workflow).toContain("bun run test:integration");
+    expect(workflow).toContain("Swatinem/rust-cache@v2");
     expect(workflow).not.toMatch(/https?:\/\/[^\s]+\/video/);
   });
 });

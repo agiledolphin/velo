@@ -1,9 +1,25 @@
 name: Platform release check
 
 on:
-  pull_request:
   push:
     branches: [main]
+    tags:
+      - "v*"
+    paths:
+      - ".github/workflows/platform-release-check.yml"
+      - "package.json"
+      - "bun.lock"
+      - "scripts/bundle-config.test.ts"
+      - "scripts/engine-download.ts"
+      - "scripts/engine-manifest.ts"
+      - "scripts/install-engine.ts"
+      - "scripts/prepare-sidecar.ts"
+      - "scripts/verify-engine.ts"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/build.rs"
+      - "src-tauri/capabilities/**"
+      - "src-tauri/tauri.conf.json"
   workflow_dispatch:
 
 permissions:
@@ -43,6 +59,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'

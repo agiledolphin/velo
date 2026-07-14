@@ -47,7 +47,9 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-`.github/workflows/platform-release-check.yml` 会在 Windows x64 和 Linux x64 原生运行器上重复测试与 Clippy，分别构建 NSIS、DEB，并检查安装包确实包含 yt-dlp sidecar。工作流产物保留 7 天用于人工抽查。
+`.github/workflows/ci.yml` 会在非文档 push 与 pull request 上运行 Ubuntu 快速验证，包括前端测试与构建、Rust 测试和 Clippy，不生成安装包。
+
+`.github/workflows/platform-release-check.yml` 只在手动触发、推送 `v*` 版本标签，或 `main` 上的 Tauri 配置、sidecar 脚本、依赖清单等打包关键文件变化时运行。它会在 Windows x64 和 Linux x64 原生运行器上构建 NSIS、DEB，检查安装包确实包含 yt-dlp sidecar，并保留 7 天产物用于人工抽查。三个工作流均复用 Cargo 缓存；真实站点兼容性测试仍保持手动触发。
 
 真实站点测试默认忽略，仅对自己有权测试的公开地址显式运行：
 
