@@ -163,6 +163,37 @@ export async function fetchThumbnailDataUrl(url: string): Promise<string> {
   return invoke<string>("fetch_thumbnail", { url });
 }
 
+const representativeFrameRequests = new Map<string, Promise<string>>();
+const MAX_REPRESENTATIVE_FRAME_CACHE_ENTRIES = 8;
+
+export function generateRepresentativeFrameDataUrl(
+  url: string,
+): Promise<string> {
+  if (!isTauri()) {
+    return Promise.reject(new Error("浏览器预览不生成视频代表帧。"));
+  }
+
+  const cached = representativeFrameRequests.get(url);
+  if (cached) return cached;
+
+  const request = invoke<string>("generate_representative_frame", { url });
+  representativeFrameRequests.set(url, request);
+  if (
+    representativeFrameRequests.size > MAX_REPRESENTATIVE_FRAME_CACHE_ENTRIES
+  ) {
+    const oldest = representativeFrameRequests.keys().next().value;
+    if (oldest !== undefined && oldest !== url) {
+      representativeFrameRequests.delete(oldest);
+    }
+  }
+  void request.catch(() => {
+    if (representativeFrameRequests.get(url) === request) {
+      representativeFrameRequests.delete(url);
+    }
+  });
+  return request;
+}
+
 export async function startDownload(
   task: DownloadTask,
 ): Promise<DownloadTask> {

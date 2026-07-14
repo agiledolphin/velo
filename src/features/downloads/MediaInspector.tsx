@@ -5,6 +5,7 @@ import {
   cancelDownload,
   chooseDownloadTarget,
   fetchThumbnailDataUrl,
+  generateRepresentativeFrameDataUrl,
   inspectMedia,
   isInspectionAbort,
   onDownloadEvent,
@@ -406,27 +407,46 @@ function DownloadStatus({
 
 function MediaThumbnail({ media }: { media: MediaInfo }) {
   const [source, setSource] = useState<string | null>(null);
-  const [loading, setLoading] = useState(Boolean(media.thumbnailUrl));
+  const canGenerateFrame = media.formats.some((format) => format.hasVideo);
+  const [loading, setLoading] = useState(
+    Boolean(media.thumbnailUrl) || canGenerateFrame,
+  );
 
   useEffect(() => {
     let active = true;
-    setSource(null);
-    setLoading(Boolean(media.thumbnailUrl));
-    if (!media.thumbnailUrl) return () => undefined;
+    let representativeFrameReady = false;
+    let pending = Number(Boolean(media.thumbnailUrl)) + Number(canGenerateFrame);
+    const finish = () => {
+      pending -= 1;
+      if (active && pending === 0) setLoading(false);
+    };
 
-    void fetchThumbnailDataUrl(media.thumbnailUrl)
-      .then((dataUrl) => {
-        if (active) setSource(dataUrl);
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    setSource(null);
+    setLoading(pending > 0);
+
+    if (media.thumbnailUrl) {
+      void fetchThumbnailDataUrl(media.thumbnailUrl)
+        .then((dataUrl) => {
+          if (active && !representativeFrameReady) setSource(dataUrl);
+        })
+        .catch(() => undefined)
+        .finally(finish);
+    }
+
+    if (canGenerateFrame) {
+      void generateRepresentativeFrameDataUrl(media.sourceUrl)
+        .then((dataUrl) => {
+          representativeFrameReady = true;
+          if (active) setSource(dataUrl);
+        })
+        .catch(() => undefined)
+        .finally(finish);
+    }
 
     return () => {
       active = false;
     };
-  }, [media.thumbnailUrl]);
+  }, [canGenerateFrame, media.sourceUrl, media.thumbnailUrl]);
 
   return (
     <div
