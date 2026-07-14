@@ -1,7 +1,9 @@
+import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
 import {
   assertFfmpegBinaryChecksum,
+  extractFfmpegBinary,
   ffmpegDownloadUrl,
   ffmpegSidecarFileName,
   resolveFfmpegAssetForTarget,
@@ -18,9 +20,25 @@ describe("FFmpeg manifest", () => {
     expect(resolveFfmpegAssetForTarget("x86_64-unknown-linux-gnu").version).toBe(
       "8.1.2",
     );
-    expect(resolveFfmpegAssetForTarget("x86_64-pc-windows-msvc").assetName).toBe(
-      "ffmpeg-win32-x64",
+    const windows = resolveFfmpegAssetForTarget("x86_64-pc-windows-msvc");
+    expect(windows.assetName).toBe("ffmpeg-8.1.2-essentials_build.zip");
+    expect(windows.version).toBe("8.1.2");
+    expect(ffmpegDownloadUrl(windows)).toBe(
+      "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-essentials_build.zip",
     );
+  });
+
+  it("extracts only the configured nested archive entry", () => {
+    const asset = resolveFfmpegAssetForTarget("x86_64-pc-windows-msvc");
+    const expected = new TextEncoder().encode("ffmpeg");
+    const archive = zipSync({
+      [asset.archiveEntry!]: expected,
+      "ffmpeg-8.1.2-essentials_build/bin/ffprobe.exe": new TextEncoder().encode(
+        "ffprobe",
+      ),
+    });
+
+    expect(extractFfmpegBinary(archive, asset)).toEqual(expected);
   });
 
   it("uses Tauri target-triple sidecar names", () => {

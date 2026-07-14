@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { unzipSync } from "fflate";
 
-export const MAX_FFMPEG_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+export const MAX_FFMPEG_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 export interface FfmpegAsset {
   assetName: string;
@@ -13,9 +13,9 @@ export interface FfmpegAsset {
   archiveEntry?: string;
 }
 
-const STATIC_RELEASE =
-  "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1";
 const MARTIN_RIEDL_RELEASE = "https://ffmpeg.martin-riedl.de/download";
+const GYAN_RELEASE =
+  "https://github.com/GyanD/codexffmpeg/releases/download/8.1.2";
 
 const ASSETS: Record<string, FfmpegAsset> = {
   "darwin-arm64": martinRiedlAsset(
@@ -46,11 +46,15 @@ const ASSETS: Record<string, FfmpegAsset> = {
     "56452c0bfc4ee0325cd615d62f46ba8264f62eed34f727c2224c6c84fa7b8719",
     "bea0dfb96f7223b1be497cf11ccda9ddd9a39103b948b342bb6db1c60a56be12",
   ),
-  "win32-x64": rawStaticAsset(
-    "ffmpeg-win32-x64",
-    "04e1307997530f9cf2fe35cba2ca7e8875ca91da02f89d6c7243df819c94ad00",
-    "ffmpeg.exe",
-  ),
+  "win32-x64": {
+    assetName: "ffmpeg-8.1.2-essentials_build.zip",
+    executableName: "ffmpeg.exe",
+    version: "8.1.2",
+    downloadUrl: `${GYAN_RELEASE}/ffmpeg-8.1.2-essentials_build.zip`,
+    archiveSha256: "db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec",
+    binarySha256: "1326dde4c84ff1f96fe6b8916c5bed29e163e9b5dccf995f6f3db069d143ec5e",
+    archiveEntry: "ffmpeg-8.1.2-essentials_build/bin/ffmpeg.exe",
+  },
 };
 
 function martinRiedlAsset(
@@ -68,21 +72,6 @@ function martinRiedlAsset(
     archiveSha256,
     binarySha256,
     archiveEntry: "ffmpeg",
-  };
-}
-
-function rawStaticAsset(
-  assetName: string,
-  sha256: string,
-  executableName = "ffmpeg",
-): FfmpegAsset {
-  return {
-    assetName,
-    executableName,
-    version: "6.1.1",
-    downloadUrl: `${STATIC_RELEASE}/${assetName}`,
-    archiveSha256: sha256,
-    binarySha256: sha256,
   };
 }
 
@@ -125,7 +114,9 @@ export function extractFfmpegBinary(
   asset: FfmpegAsset,
 ): Uint8Array {
   if (!asset.archiveEntry) return bytes;
-  const binary = unzipSync(bytes)[asset.archiveEntry];
+  const binary = unzipSync(bytes, {
+    filter: (file) => file.name === asset.archiveEntry,
+  })[asset.archiveEntry];
   if (!binary?.byteLength) throw new Error("FFmpeg 压缩包中缺少可执行文件");
   return binary;
 }

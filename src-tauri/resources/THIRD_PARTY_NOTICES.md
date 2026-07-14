@@ -12,7 +12,7 @@ Velo bundles separate media-processing executables and invokes them as child pro
 
 - Project and source: https://ffmpeg.org/
 - macOS and Linux build source: https://ffmpeg.martin-riedl.de/
-- Windows build source: https://github.com/eugeneware/ffmpeg-static
+- Windows build source: https://www.gyan.dev/ffmpeg/builds/
 - License information: https://ffmpeg.org/legal.html
 
 The exact build asset and SHA-256 for each target are recorded in

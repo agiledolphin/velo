@@ -45,6 +45,7 @@ export async function downloadFfmpegAsset(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
+  chunks.length = 0;
   assertFfmpegArchiveChecksum(bytes, asset);
   const binary = extractFfmpegBinary(bytes, asset);
   assertFfmpegBinaryChecksum(binary, asset);
