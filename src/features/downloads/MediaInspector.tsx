@@ -1,7 +1,11 @@
 import { FormEvent, useEffect, useId, useRef, useState } from "react";
-import type { MediaInfo } from "../../lib/media";
+import type { DownloadTask, MediaInfo } from "../../lib/media";
 import { normalizeWebUrl } from "../../lib/url";
-import { inspectMedia, isInspectionAbort } from "../../lib/velo-api";
+import {
+  chooseDownloadTarget,
+  inspectMedia,
+  isInspectionAbort,
+} from "../../lib/velo-api";
 
 type InspectorState =
   | { status: "idle"; notice?: string }
@@ -160,6 +164,27 @@ export function MediaInspector() {
 }
 
 function MediaResult({ media }: { media: MediaInfo }) {
+  const [selectedFormatId, setSelectedFormatId] = useState(media.formats[0]?.id ?? "");
+  const [preparing, setPreparing] = useState(false);
+  const [preparedTask, setPreparedTask] = useState<DownloadTask | null>(null);
+  const [prepareError, setPrepareError] = useState<string | null>(null);
+  const selectedFormat = media.formats.find(({ id }) => id === selectedFormatId);
+
+  async function handleChooseDestination() {
+    if (!selectedFormat || preparing) return;
+    setPreparing(true);
+    setPrepareError(null);
+    setPreparedTask(null);
+    try {
+      const task = await chooseDownloadTarget(media, selectedFormat);
+      if (task) setPreparedTask(task);
+    } catch (error) {
+      setPrepareError(error instanceof Error ? error.message : "无法准备保存位置。");
+    } finally {
+      setPreparing(false);
+    }
+  }
+
   return (
     <article className="media-result">
       <div className="media-summary">
@@ -174,13 +199,18 @@ function MediaResult({ media }: { media: MediaInfo }) {
       </div>
 
       <div className="format-list" aria-label="可用格式">
-        {media.formats.map((format, index) => (
+        {media.formats.map((format) => (
           <label className="format-option" key={format.id}>
             <input
               type="radio"
               name="media-format"
               value={format.id}
-              defaultChecked={index === 0}
+              checked={format.id === selectedFormatId}
+              onChange={() => {
+                setSelectedFormatId(format.id);
+                setPreparedTask(null);
+                setPrepareError(null);
+              }}
             />
             <span className="radio-mark" aria-hidden="true" />
             <span className="format-title">{format.label}</span>
@@ -190,8 +220,21 @@ function MediaResult({ media }: { media: MediaInfo }) {
         ))}
       </div>
 
-      <button className="download-button" type="button" disabled>
-        当前仅支持媒体解析
+      {preparedTask && (
+        <div className="download-prepared" role="status">
+          <strong>保存位置已准备</strong>
+          <span title={preparedTask.destinationPath}>{preparedTask.destinationPath}</span>
+          <p>下一步将接入真实下载与进度显示。</p>
+        </div>
+      )}
+      {prepareError && <p className="download-error" role="alert">{prepareError}</p>}
+      <button
+        className="download-button"
+        type="button"
+        disabled={!selectedFormat || preparing}
+        onClick={handleChooseDestination}
+      >
+        {preparing ? "正在打开保存位置…" : "选择保存位置"}
       </button>
     </article>
   );

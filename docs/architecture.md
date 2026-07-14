@@ -61,19 +61,21 @@ Tauri 开发与发布构建钩子读取 `TAURI_ENV_TARGET_TRIPLE`，将目标映
 - 前后端都只接受 HTTP 和 HTTPS 地址。
 - UI 不能提交任意命令行参数。
 - UI 只能按已登记的请求 ID 取消解析，不能指定或终止任意系统进程。
-- 默认能力仅包含 Tauri 核心权限和顶部自定义标题区所需的窗口拖拽权限。
+- 默认能力仅包含 Tauri 核心权限、窗口拖拽和原生保存对话框权限。
 - yt-dlp 只在模拟模式下读取媒体信息，不下载文件、不加载 Cookie、不写缓存。
 - 当前不显示远程封面，因此尚未向 WebView 开放远程图片来源。
 
 生产 CSP 使用 `default-src 'none'`，仅允许自身脚本、样式、字体与图片，以及 Tauri IPC 所需的 `ipc:` 和 `http://ipc.localhost` 连接。对象、框架、媒体、Worker、Manifest、表单提交和基础 URL 均显式禁用；不开放 `unsafe-inline`、`unsafe-eval`、远程协议、通配符或文件资产协议。
 
-Tauri 配置显式启用唯一的 `default` capability，避免以后新增 capability 文件时被构建系统自动纳入。该 capability 目前仍只授予核心默认权限和自定义顶部区域所需的窗口拖动权限。
+Tauri 配置显式启用唯一的 `default` capability，避免以后新增 capability 文件时被构建系统自动纳入。该 capability 只授予核心默认权限、自定义顶部区域所需的窗口拖动权限，以及 `dialog:allow-save`；不使用包含打开文件等能力的 `dialog:default`。
 
 开发 CSP 与生产策略分离，只为 Vite 增加自身连接、本机热更新 WebSocket、动态样式和预览所需的 `data:` / `blob:` 图片。显示远程封面或扩大 WebView 网络能力时，必须单独评审来源并同步更新安全回归测试，不能直接开放任意 HTTPS 来源。
 
 ## 下载任务与事件边界
 
-第三阶段使用不可变的 `DownloadTask` 描述一次用户选择：强类型任务 ID、来源地址、媒体标题和格式 ID。任务 ID 继续限制为最多 64 个 ASCII 字母、数字、连字符或下划线；来源只接受 HTTP/HTTPS，标题和格式 ID 具有独立长度上限。保存路径与文件名尚未进入任务模型，将在文件选择和命名规则确定后添加，避免先固化未经验证的路径契约。
+第三阶段使用不可变的 `DownloadTask` 描述一次用户选择：强类型任务 ID、来源地址、媒体标题、格式 ID 和绝对目标路径。任务 ID 继续限制为最多 64 个 ASCII 字母、数字、连字符或下划线；来源只接受 HTTP/HTTPS，标题和格式 ID 具有独立长度上限。
+
+文件名建议由 Rust 从媒体标题生成：保留 Unicode 文本，移除控制字符和跨平台非法字符，限制长度，规避 Windows 保留设备名，并使用经过约束的媒体扩展名。前端只能通过原生保存对话框取得目标路径；对话框取消时不创建任务，选择后 Rust 再验证绝对路径、文件名、扩展名和保留名。当前步骤只准备任务，不创建文件，也不启动 yt-dlp。
 
 任务生命周期通过 `DownloadEvent` 发送，而不是让前端推断外部进程状态。事件包含任务 ID、单调递增的序号和扁平化类型，当前类型为 `queued`、`started`、`progress`、`processing`、`completed`、`cancelled` 与 `failed`。前端后续只接受序号更新的事件，从而忽略异步通道中迟到的进度。
 

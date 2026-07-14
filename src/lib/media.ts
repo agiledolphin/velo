@@ -22,3 +22,11 @@ export interface InspectFailure {
   code: string;
   message: string;
 }
+
+export interface DownloadTask {
+  id: string;
+  sourceUrl: string;
+  mediaTitle: string;
+  formatId: string;
+  destinationPath: string;
+}

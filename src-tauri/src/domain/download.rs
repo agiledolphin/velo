@@ -1,9 +1,14 @@
+use std::path::Path;
+
 use serde::Serialize;
 use url::Url;
 
 const MAX_TASK_ID_LENGTH: usize = 64;
 const MAX_MEDIA_TITLE_LENGTH: usize = 512;
 const MAX_FORMAT_ID_LENGTH: usize = 128;
+const MAX_FILE_STEM_CHARS: usize = 120;
+const MAX_FILE_NAME_BYTES: usize = 255;
+const MAX_EXTENSION_LENGTH: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
@@ -32,6 +37,7 @@ pub struct DownloadTask {
     pub source_url: String,
     pub media_title: String,
     pub format_id: String,
+    pub destination_path: String,
 }
 
 impl DownloadTask {
@@ -40,6 +46,8 @@ impl DownloadTask {
         source_url: impl Into<String>,
         media_title: impl Into<String>,
         format_id: impl Into<String>,
+        destination_path: impl Into<String>,
+        expected_extension: &str,
     ) -> Result<Self, DownloadModelError> {
         let source_url = source_url.into();
         let parsed_url = Url::parse(&source_url).map_err(|_| DownloadModelError::SourceUrl)?;
@@ -57,13 +65,119 @@ impl DownloadTask {
             return Err(DownloadModelError::FormatId);
         }
 
+        let destination_path = destination_path.into();
+        validate_destination_path(&destination_path, expected_extension)?;
+
         Ok(Self {
             id,
             source_url,
             media_title,
             format_id,
+            destination_path,
         })
     }
+}
+
+pub fn suggested_file_name(title: &str, extension: &str) -> String {
+    let extension = normalize_extension(extension).unwrap_or_else(|| "mp4".into());
+    let mut stem = title
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+            {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches([' ', '.'])
+        .chars()
+        .take(MAX_FILE_STEM_CHARS)
+        .collect::<String>();
+
+    stem = stem.trim_end_matches([' ', '.']).to_owned();
+    if stem.is_empty() {
+        stem = "video".into();
+    }
+    let max_stem_bytes = MAX_FILE_NAME_BYTES - extension.len() - 1;
+    while stem.len() > max_stem_bytes {
+        stem.pop();
+    }
+    stem = stem.trim_end_matches([' ', '.']).to_owned();
+    if is_windows_reserved_name(&stem) {
+        stem.insert(0, '_');
+    }
+
+    format!("{stem}.{extension}")
+}
+
+fn validate_destination_path(
+    destination_path: &str,
+    expected_extension: &str,
+) -> Result<(), DownloadModelError> {
+    let expected_extension =
+        normalize_extension(expected_extension).ok_or(DownloadModelError::ExpectedExtension)?;
+    let path = Path::new(destination_path);
+    if destination_path.trim().is_empty() || !path.is_absolute() {
+        return Err(DownloadModelError::DestinationPath);
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(DownloadModelError::DestinationPath)?;
+    if file_name.is_empty()
+        || file_name.len() > MAX_FILE_NAME_BYTES
+        || file_name.contains('\0')
+        || file_name.trim_matches([' ', '.']).is_empty()
+    {
+        return Err(DownloadModelError::DestinationPath);
+    }
+
+    let actual_extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    if actual_extension.as_deref() != Some(expected_extension.as_str()) {
+        return Err(DownloadModelError::DestinationExtension);
+    }
+
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or(DownloadModelError::DestinationPath)?;
+    if is_windows_reserved_name(stem) {
+        return Err(DownloadModelError::DestinationPath);
+    }
+
+    Ok(())
+}
+
+fn normalize_extension(extension: &str) -> Option<String> {
+    let extension = extension.trim().trim_start_matches('.');
+    (!extension.is_empty()
+        && extension.len() <= MAX_EXTENSION_LENGTH
+        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    .then(|| extension.to_ascii_lowercase())
+}
+
+fn is_windows_reserved_name(stem: &str) -> bool {
+    let name = stem.split('.').next().unwrap_or(stem).to_ascii_uppercase();
+    matches!(name.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || name
+            .strip_prefix("COM")
+            .or_else(|| name.strip_prefix("LPT"))
+            .is_some_and(|suffix| {
+                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +186,9 @@ pub enum DownloadModelError {
     SourceUrl,
     MediaTitle,
     FormatId,
+    DestinationPath,
+    DestinationExtension,
+    ExpectedExtension,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -136,11 +253,16 @@ mod tests {
             "https://video.example/watch/1",
             "Example video",
             "1080p-mp4",
+            std::env::temp_dir()
+                .join("Example video.mp4")
+                .to_string_lossy(),
+            "mp4",
         )
         .expect("download task should be valid");
 
         assert_eq!(task.source_url, "https://video.example/watch/1");
         assert_eq!(task.format_id, "1080p-mp4");
+        assert!(task.destination_path.ends_with("Example video.mp4"));
     }
 
     #[test]
@@ -150,16 +272,89 @@ mod tests {
             Err(DownloadModelError::TaskId)
         );
         assert_eq!(
-            DownloadTask::new(task_id(), "file:///tmp/video", "Title", "format"),
+            DownloadTask::new(
+                task_id(),
+                "file:///tmp/video",
+                "Title",
+                "format",
+                std::env::temp_dir().join("video.mp4").to_string_lossy(),
+                "mp4",
+            ),
             Err(DownloadModelError::SourceUrl)
         );
         assert_eq!(
-            DownloadTask::new(task_id(), "https://video.example/1", " ", "format"),
+            DownloadTask::new(
+                task_id(),
+                "https://video.example/1",
+                " ",
+                "format",
+                std::env::temp_dir().join("video.mp4").to_string_lossy(),
+                "mp4",
+            ),
             Err(DownloadModelError::MediaTitle)
         );
         assert_eq!(
-            DownloadTask::new(task_id(), "https://video.example/1", "Title", " "),
+            DownloadTask::new(
+                task_id(),
+                "https://video.example/1",
+                "Title",
+                " ",
+                std::env::temp_dir().join("video.mp4").to_string_lossy(),
+                "mp4",
+            ),
             Err(DownloadModelError::FormatId)
+        );
+    }
+
+    #[test]
+    fn creates_portable_suggested_file_names() {
+        assert_eq!(
+            suggested_file_name("  微落：轻取/流光？  ", ".MP4"),
+            "微落：轻取 流光？.mp4"
+        );
+        assert_eq!(suggested_file_name("CON", "mp4"), "_CON.mp4");
+        assert_eq!(suggested_file_name("...", "bad/ext"), "video.mp4");
+        assert!(suggested_file_name(&"微".repeat(120), "webm").len() <= 255);
+    }
+
+    #[test]
+    fn rejects_unsafe_or_mismatched_destinations() {
+        let base = std::env::temp_dir();
+        let reserved = base.join("CON.mp4").to_string_lossy().into_owned();
+        let wrong_extension = base.join("video.webm").to_string_lossy().into_owned();
+
+        assert_eq!(
+            DownloadTask::new(
+                task_id(),
+                "https://video.example/1",
+                "Title",
+                "format",
+                "video.mp4",
+                "mp4",
+            ),
+            Err(DownloadModelError::DestinationPath)
+        );
+        assert_eq!(
+            DownloadTask::new(
+                task_id(),
+                "https://video.example/1",
+                "Title",
+                "format",
+                reserved,
+                "mp4",
+            ),
+            Err(DownloadModelError::DestinationPath)
+        );
+        assert_eq!(
+            DownloadTask::new(
+                task_id(),
+                "https://video.example/1",
+                "Title",
+                "format",
+                wrong_extension,
+                "mp4",
+            ),
+            Err(DownloadModelError::DestinationExtension)
         );
     }
 

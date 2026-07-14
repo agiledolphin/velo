@@ -1,5 +1,11 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import type { InspectFailure, MediaInfo } from "./media";
+import { save } from "@tauri-apps/plugin-dialog";
+import type {
+  DownloadTask,
+  InspectFailure,
+  MediaFormat,
+  MediaInfo,
+} from "./media";
 
 function browserPreviewMedia(url: string): MediaInfo {
   return {
@@ -96,5 +102,51 @@ export async function inspectMedia(
     throw new Error("暂时无法解析这个地址，请稍后再试。");
   } finally {
     signal.removeEventListener("abort", handleAbort);
+  }
+}
+
+interface DownloadFileSuggestion {
+  fileName: string;
+  extension: string;
+}
+
+export async function chooseDownloadTarget(
+  media: MediaInfo,
+  format: MediaFormat,
+): Promise<DownloadTask | null> {
+  if (!isTauri()) {
+    throw new Error("请在 Velo 桌面开发模式中选择保存位置。");
+  }
+
+  try {
+    const suggestion = await invoke<DownloadFileSuggestion>(
+      "suggest_download_file_name",
+      { title: media.title, extension: format.container },
+    );
+    const destinationPath = await save({
+      title: "选择视频保存位置",
+      defaultPath: suggestion.fileName,
+      filters: [
+        {
+          name: `${format.label} (${suggestion.extension.toUpperCase()})`,
+          extensions: [suggestion.extension],
+        },
+      ],
+    });
+    if (!destinationPath) return null;
+
+    return await invoke<DownloadTask>("prepare_download_task", {
+      taskId: crypto.randomUUID(),
+      sourceUrl: media.sourceUrl,
+      mediaTitle: media.title,
+      formatId: format.id,
+      destinationPath,
+      expectedExtension: suggestion.extension,
+    });
+  } catch (error) {
+    if (isInspectFailure(error)) {
+      throw new Error(error.message);
+    }
+    throw new Error("无法准备保存位置，请重新选择后再试。");
   }
 }

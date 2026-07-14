@@ -20,8 +20,11 @@ pub fn run() {
     );
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::new(YtDlpEngine::new(runner)))
         .invoke_handler(tauri::generate_handler![
+            commands::download::suggest_download_file_name,
+            commands::download::prepare_download_task,
             commands::media::inspect_url,
             commands::media::cancel_inspection
         ])

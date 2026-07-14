@@ -19,6 +19,12 @@ async function loadSecurityConfig(): Promise<SecurityConfig> {
   return config.app.security;
 }
 
+async function loadDefaultCapability(): Promise<{ permissions: string[] }> {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  const path = resolve(directory, "../src-tauri/capabilities/default.json");
+  return JSON.parse(await readFile(path, "utf8")) as { permissions: string[] };
+}
+
 describe("Tauri security policy", () => {
   it("keeps the production WebView closed to remote resources", async () => {
     const { capabilities, csp, assetProtocol } = await loadSecurityConfig();
@@ -45,5 +51,13 @@ describe("Tauri security policy", () => {
     expect(Object.values(devCsp).join(" ")).not.toMatch(
       /https:|wss:|\*|'unsafe-eval'/,
     );
+  });
+
+  it("grants only the save-dialog permission needed by the download flow", async () => {
+    const { permissions } = await loadDefaultCapability();
+
+    expect(permissions).toContain("dialog:allow-save");
+    expect(permissions).not.toContain("dialog:default");
+    expect(permissions).not.toContain("dialog:allow-open");
   });
 });
