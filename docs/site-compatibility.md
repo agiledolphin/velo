@@ -21,7 +21,7 @@ bun run test:integration
 
 | 日期 | 站点 | yt-dlp | macOS arm64 | Windows x64 | Linux x64 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 待验证 | 待提供 | `2026.07.04` | 待验证 | 待验证 | 待验证 | 需要调用方提供有权测试的公开地址 |
+| 2026-07-14 | `x.com` | `2026.07.04` | 通过 | 通过 | 通过 | [运行 29313750794](https://github.com/agiledolphin/velo/actions/runs/29313750794)；2056 秒，5 个格式 |
 
 结果使用以下状态：
 
