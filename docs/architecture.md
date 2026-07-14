@@ -63,13 +63,19 @@ Tauri 开发与发布构建钩子读取 `TAURI_ENV_TARGET_TRIPLE`，将目标映
 - UI 只能按已登记的请求 ID 取消解析，不能指定或终止任意系统进程。
 - 默认能力仅包含 Tauri 核心权限、窗口拖拽和原生保存对话框权限。
 - yt-dlp 只在模拟模式下读取媒体信息，不下载文件、不加载 Cookie、不写缓存。
-- 当前不显示远程封面，因此尚未向 WebView 开放远程图片来源。
+- 远程封面只由 Rust 受限获取，WebView 不直接访问远程图片来源。
 
-生产 CSP 使用 `default-src 'none'`，仅允许自身脚本、样式、字体与图片，以及 Tauri IPC 所需的 `ipc:` 和 `http://ipc.localhost` 连接。对象、框架、媒体、Worker、Manifest、表单提交和基础 URL 均显式禁用；不开放 `unsafe-inline`、`unsafe-eval`、远程协议、通配符或文件资产协议。
+生产 CSP 使用 `default-src 'none'`，仅允许自身脚本、样式、字体、图片数据 URL，以及 Tauri IPC 所需的 `ipc:` 和 `http://ipc.localhost` 连接。对象、框架、媒体、Worker、Manifest、表单提交和基础 URL 均显式禁用；不开放 `unsafe-inline`、`unsafe-eval`、远程协议、通配符或文件资产协议。
 
 Tauri 配置显式启用唯一的 `default` capability，避免以后新增 capability 文件时被构建系统自动纳入。该 capability 只授予核心默认权限、自定义顶部区域所需的窗口拖动权限，以及 `dialog:allow-save`；不使用包含打开文件等能力的 `dialog:default`。
 
-开发 CSP 与生产策略分离，只为 Vite 增加自身连接、本机热更新 WebSocket、动态样式和预览所需的 `data:` / `blob:` 图片。显示远程封面或扩大 WebView 网络能力时，必须单独评审来源并同步更新安全回归测试，不能直接开放任意 HTTPS 来源。
+开发 CSP 与生产策略分离，只为 Vite 增加自身连接、本机热更新 WebSocket、动态样式和预览所需的 `data:` / `blob:` 图片。扩大 WebView 网络能力时，必须单独评审来源并同步更新安全回归测试，不能直接开放任意 HTTPS 来源。
+
+## 封面获取边界
+
+yt-dlp 返回的封面 URL 不直接交给 WebView。前端通过独立 Tauri 命令请求封面，Rust 只接受不含账号信息的 HTTP/HTTPS 地址，并在每次请求和每次重定向前解析域名、拒绝本机、私网、链路本地、保留和文档网络。验证通过的公网 IP 会固定到该次 HTTP 客户端，降低 DNS 重绑定风险。
+
+请求不携带 Cookie，连接和整次请求分别设置超时，最多跟随三次手动重定向。响应必须是受支持的位图 MIME，声明大小和流式读取均限制为 5 MiB；SVG 与 HTML 不进入 WebView。合法内容编码为 `data:` URL 返回，加载失败只影响封面并回退到品牌占位图，不改变媒体解析结果。
 
 ## 下载任务与事件边界
 

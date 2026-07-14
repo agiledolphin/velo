@@ -32,7 +32,7 @@ describe("Tauri security policy", () => {
     expect(capabilities).toEqual(["default"]);
     expect(csp["default-src"]).toBe("'none'");
     expect(csp["connect-src"]).toBe("ipc: http://ipc.localhost");
-    expect(csp["img-src"]).toBe("'self'");
+    expect(csp["img-src"]).toBe("'self' data:");
     expect(csp["object-src"]).toBe("'none'");
     expect(csp["frame-ancestors"]).toBe("'none'");
     expect(Object.values(csp).join(" ")).not.toMatch(

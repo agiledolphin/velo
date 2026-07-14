@@ -150,3 +150,11 @@ export async function chooseDownloadTarget(
     throw new Error("无法准备保存位置，请重新选择后再试。");
   }
 }
+
+export async function fetchThumbnailDataUrl(url: string): Promise<string> {
+  if (!isTauri()) {
+    throw new Error("浏览器预览不加载远程封面。");
+  }
+
+  return invoke<string>("fetch_thumbnail", { url });
+}

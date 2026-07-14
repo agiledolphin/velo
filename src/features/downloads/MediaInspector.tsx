@@ -3,6 +3,7 @@ import type { DownloadTask, MediaInfo } from "../../lib/media";
 import { normalizeWebUrl } from "../../lib/url";
 import {
   chooseDownloadTarget,
+  fetchThumbnailDataUrl,
   inspectMedia,
   isInspectionAbort,
 } from "../../lib/velo-api";
@@ -188,9 +189,7 @@ function MediaResult({ media }: { media: MediaInfo }) {
   return (
     <article className="media-result">
       <div className="media-summary">
-        <div className="thumbnail-placeholder" aria-hidden="true">
-          <span>VELO</span>
-        </div>
+        <MediaThumbnail media={media} />
         <div>
           <span className="site-label">{media.site}</span>
           <h2>{media.title}</h2>
@@ -237,5 +236,47 @@ function MediaResult({ media }: { media: MediaInfo }) {
         {preparing ? "正在打开保存位置…" : "选择保存位置"}
       </button>
     </article>
+  );
+}
+
+function MediaThumbnail({ media }: { media: MediaInfo }) {
+  const [source, setSource] = useState<string | null>(null);
+  const [loading, setLoading] = useState(Boolean(media.thumbnailUrl));
+
+  useEffect(() => {
+    let active = true;
+    setSource(null);
+    setLoading(Boolean(media.thumbnailUrl));
+    if (!media.thumbnailUrl) return () => undefined;
+
+    void fetchThumbnailDataUrl(media.thumbnailUrl)
+      .then((dataUrl) => {
+        if (active) setSource(dataUrl);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [media.thumbnailUrl]);
+
+  return (
+    <div
+      className={`thumbnail-placeholder${loading ? " is-loading" : ""}`}
+      aria-busy={loading}
+    >
+      {source ? (
+        <img
+          src={source}
+          alt={`${media.title} 的视频封面`}
+          onError={() => setSource(null)}
+        />
+      ) : (
+        <span aria-hidden="true">VELO</span>
+      )}
+    </div>
   );
 }
