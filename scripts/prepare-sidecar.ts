@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { downloadEngineAsset } from "./engine-download";
+import { downloadDenoAsset } from "./deno-download";
+import {
+  DENO_VERSION,
+  assertDenoBinaryChecksum,
+  denoSidecarFileName,
+  resolveDenoAssetForTarget,
+} from "./deno-manifest";
 import { downloadFfmpegAsset } from "./ffmpeg-download";
 import {
   assertFfmpegBinaryChecksum,
@@ -50,6 +57,34 @@ async function main() {
   const target = await targetTriple();
   await prepareYtDlp(target);
   await prepareFfmpeg(target);
+  await prepareDeno(target);
+}
+
+async function prepareDeno(target: string) {
+  const asset = resolveDenoAssetForTarget(target);
+  const destination = join(sidecarDirectory, denoSidecarFileName(target, asset));
+  const temporary = `${destination}.${process.pid}.tmp`;
+
+  await mkdir(sidecarDirectory, { recursive: true });
+  try {
+    const existing = new Uint8Array(await readFile(destination));
+    assertDenoBinaryChecksum(existing, asset);
+    console.log(`Deno ${DENO_VERSION} sidecar 已就绪：${destination}`);
+    return;
+  } catch {
+    await rm(destination, { force: true });
+  }
+
+  const bytes = await downloadDenoAsset(asset);
+  assertDenoBinaryChecksum(bytes, asset);
+  await rm(temporary, { force: true });
+  try {
+    await writeFile(temporary, bytes, { mode: 0o755, flag: "wx" });
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  console.log(`Deno ${DENO_VERSION} sidecar 已准备：${destination}`);
 }
 
 async function prepareYtDlp(target: string) {

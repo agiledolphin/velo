@@ -90,7 +90,7 @@ impl InspectError {
     pub fn authentication_required() -> Self {
         Self {
             code: "authentication_required",
-            message: "该内容需要登录或 Cookie，当前版本暂不支持账号凭据。".into(),
+            message: "该内容需要登录信息，请选择从浏览器导出的 Cookie 文件后重试。".into(),
         }
     }
 
@@ -105,6 +105,13 @@ impl InspectError {
         Self {
             code: "rate_limited",
             message: "网站暂时限制了请求，请稍后再试。".into(),
+        }
+    }
+
+    pub fn invalid_cookie_file() -> Self {
+        Self {
+            code: "invalid_cookie_file",
+            message: "请选择有效的 Netscape 格式 Cookie 文件（最大 5 MiB）。".into(),
         }
     }
 

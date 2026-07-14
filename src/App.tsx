@@ -16,7 +16,7 @@ export default function App() {
 
       <header className="app-header" data-tauri-drag-region>
         <BrandMark />
-        <p className="build-label">PREVIEW · 0.1</p>
+        <p className="build-label">0.2.0</p>
       </header>
 
       <section className="workspace" aria-labelledby="workspace-title">

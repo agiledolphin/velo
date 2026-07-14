@@ -399,6 +399,39 @@ input:disabled {
   font-size: 12px;
 }
 
+.cookie-button {
+  margin-top: 16px;
+  padding: 8px 14px;
+  border: 1px solid rgba(143, 59, 50, 0.3);
+  border-radius: 8px;
+  color: var(--danger);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.cookie-button:hover:not(:disabled) {
+  background: rgba(143, 59, 50, 0.07);
+}
+
+.cookie-button:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.cookie-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.error-state small {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .error-state {
   flex-direction: column;
   padding: 28px;

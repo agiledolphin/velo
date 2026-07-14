@@ -19,3 +19,13 @@ The exact build asset and SHA-256 for each target are recorded in
 `scripts/ffmpeg-manifest.ts`. FFmpeg is a separate executable and is not linked into
 the Velo application. Review the applicable FFmpeg and third-party codec license
 obligations before distributing a production release.
+
+## Deno
+
+- Project: https://github.com/denoland/deno
+- Version: 2.9.2
+- License: MIT
+
+Deno is bundled as a separate executable and is invoked by yt-dlp with restricted
+permissions to solve supported website JavaScript challenges. Remote yt-dlp
+components remain disabled.

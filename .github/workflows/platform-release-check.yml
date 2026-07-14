@@ -12,6 +12,8 @@ on:
       - "scripts/bundle-config.test.ts"
       - "scripts/engine-download.ts"
       - "scripts/engine-manifest.ts"
+      - "scripts/deno-download.ts"
+      - "scripts/deno-manifest.ts"
       - "scripts/ffmpeg-download.ts"
       - "scripts/ffmpeg-manifest.ts"
       - "scripts/install-engine.ts"
@@ -102,6 +104,7 @@ jobs:
           dpkg-deb --contents "$package" > package-contents.txt
           grep -q '/yt-dlp$' package-contents.txt
           grep -q '/ffmpeg$' package-contents.txt
+          grep -q '/deno$' package-contents.txt
 
       - name: Verify Windows installer contains media sidecars
         if: runner.os == 'Windows'
@@ -113,6 +116,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Unable to inspect NSIS installer" }
           if (-not ($listing | Select-String -SimpleMatch "yt-dlp.exe")) { throw "yt-dlp.exe is missing from NSIS installer" }
           if (-not ($listing | Select-String -SimpleMatch "ffmpeg.exe")) { throw "ffmpeg.exe is missing from NSIS installer" }
+          if (-not ($listing | Select-String -SimpleMatch "deno.exe")) { throw "deno.exe is missing from NSIS installer" }
 
       - uses: actions/upload-artifact@v7
         with:

@@ -8,7 +8,8 @@ use std::time::Duration;
 use application::{AppState, DownloadCoordinator};
 use infrastructure::{
     RepresentativeFrameCache, RepresentativeFrameGenerator, RestrictedProcessRunner,
-    ThumbnailFetcher, YtDlpDownloader, YtDlpEngine, configured_ffmpeg_path, configured_yt_dlp_path,
+    ThumbnailFetcher, YtDlpDownloader, YtDlpEngine, YtDlpOptions, configured_deno_path,
+    configured_ffmpeg_path, configured_yt_dlp_path,
 };
 
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -22,27 +23,32 @@ pub fn run() {
     let engine_path = configured_yt_dlp_path();
     let ffmpeg_path = configured_ffmpeg_path();
     let frame_cache = RepresentativeFrameCache::default();
+    let yt_dlp_options = YtDlpOptions::new(configured_deno_path());
     let runner = RestrictedProcessRunner::new(
         engine_path.clone(),
         INSPECT_TIMEOUT,
         MAX_ENGINE_OUTPUT_BYTES,
     );
-    let frame_generator = RepresentativeFrameGenerator::with_cache(
+    let frame_generator = RepresentativeFrameGenerator::with_options(
         RestrictedProcessRunner::new(engine_path.clone(), FRAME_TIMEOUT, MAX_STREAM_OUTPUT_BYTES),
         RestrictedProcessRunner::new(ffmpeg_path.clone(), FRAME_TIMEOUT, MAX_FRAME_OUTPUT_BYTES),
         frame_cache.clone(),
+        yt_dlp_options.clone(),
     );
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::new(YtDlpEngine::with_frame_cache(
+        .manage(AppState::new(YtDlpEngine::with_options(
             runner,
             frame_cache,
+            yt_dlp_options.clone(),
         )))
-        .manage(DownloadCoordinator::new(YtDlpDownloader::new(
+        .manage(DownloadCoordinator::new(YtDlpDownloader::with_options(
             engine_path,
             ffmpeg_path,
+            yt_dlp_options.clone(),
         )))
+        .manage(yt_dlp_options)
         .manage(ThumbnailFetcher)
         .manage(frame_generator)
         .invoke_handler(tauri::generate_handler![
@@ -52,6 +58,7 @@ pub fn run() {
             commands::download::cancel_download,
             commands::media::inspect_url,
             commands::media::cancel_inspection,
+            commands::settings::configure_cookie_file,
             commands::thumbnail::fetch_thumbnail,
             commands::thumbnail::generate_representative_frame
         ])

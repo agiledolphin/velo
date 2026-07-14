@@ -4,19 +4,21 @@ import { normalizeWebUrl } from "../../lib/url";
 import {
   cancelDownload,
   chooseDownloadTarget,
+  chooseCookieFile,
   fetchThumbnailDataUrl,
   generateRepresentativeFrameDataUrl,
   inspectMedia,
   isInspectionAbort,
   onDownloadEvent,
   startDownload,
+  VeloApiError,
 } from "../../lib/velo-api";
 
 type InspectorState =
   | { status: "idle"; notice?: string }
   | { status: "loading" }
   | { status: "ready"; media: MediaInfo }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; code?: string };
 
 function formatDuration(seconds: number | null) {
   if (seconds === null) return "时长未知";
@@ -51,6 +53,7 @@ export function MediaInspector() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<InspectorState>({ status: "idle" });
   const [downloadBusy, setDownloadBusy] = useState(false);
+  const [cookieBusy, setCookieBusy] = useState(false);
   const activeRequest = useRef<{
     id: string;
     controller: AbortController;
@@ -104,7 +107,30 @@ export function MediaInspector() {
       setState({
         status: "error",
         message: error instanceof Error ? error.message : "暂时无法解析这个地址。",
+        code: error instanceof VeloApiError ? error.code : undefined,
       });
+    }
+  }
+
+  async function handleChooseCookie() {
+    if (cookieBusy) return;
+    setCookieBusy(true);
+    try {
+      const configured = await chooseCookieFile();
+      if (configured) {
+        setState({
+          status: "idle",
+          notice: "Cookie 已在本次运行中启用，请重新解析地址",
+        });
+      }
+    } catch (error) {
+      setState({
+        status: "error",
+        message: error instanceof Error ? error.message : "无法使用这个 Cookie 文件。",
+        code: error instanceof VeloApiError ? error.code : undefined,
+      });
+    } finally {
+      setCookieBusy(false);
     }
   }
 
@@ -182,6 +208,21 @@ export function MediaInspector() {
           <div className="error-state" id={`${inputId}-error`} role="alert">
             <strong>地址无法解析</strong>
             <p>{state.message}</p>
+            {["authentication_required", "invalid_cookie_file"].includes(
+              state.code ?? "",
+            ) && (
+              <>
+                <button
+                  className="cookie-button"
+                  type="button"
+                  disabled={cookieBusy}
+                  onClick={handleChooseCookie}
+                >
+                  {cookieBusy ? "正在读取…" : "选择 Cookie 文件"}
+                </button>
+                <small>仅在本次运行中使用，退出 Velo 后自动清除。</small>
+              </>
+            )}
           </div>
         )}
 

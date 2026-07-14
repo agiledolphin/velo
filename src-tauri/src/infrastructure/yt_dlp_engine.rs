@@ -18,13 +18,18 @@ use crate::{
 use super::{
     RepresentativeFrameCache, StreamReference,
     process_runner::{ProcessError, ProcessRunner},
+    yt_dlp_options::YtDlpOptions,
 };
+
+#[cfg(test)]
+use super::yt_dlp_options::configured_deno_path;
 
 const MAX_FORMATS: usize = 24;
 
 pub struct YtDlpEngine {
     runner: Arc<dyn ProcessRunner>,
     frame_cache: RepresentativeFrameCache,
+    options: YtDlpOptions,
 }
 
 impl YtDlpEngine {
@@ -33,6 +38,7 @@ impl YtDlpEngine {
         Self::with_frame_cache(runner, RepresentativeFrameCache::default())
     }
 
+    #[cfg(test)]
     pub fn with_frame_cache(
         runner: impl ProcessRunner,
         frame_cache: RepresentativeFrameCache,
@@ -40,6 +46,19 @@ impl YtDlpEngine {
         Self {
             runner: Arc::new(runner),
             frame_cache,
+            options: YtDlpOptions::new(configured_deno_path()),
+        }
+    }
+
+    pub fn with_options(
+        runner: impl ProcessRunner,
+        frame_cache: RepresentativeFrameCache,
+        options: YtDlpOptions,
+    ) -> Self {
+        Self {
+            runner: Arc::new(runner),
+            frame_cache,
+            options,
         }
     }
 }
@@ -48,7 +67,7 @@ impl MediaEngine for YtDlpEngine {
     fn inspect<'a>(&'a self, source: &'a str) -> InspectFuture<'a> {
         Box::pin(async move {
             let source_url = validate_source_url(source)?;
-            let arguments = inspection_arguments(source_url.as_str());
+            let arguments = inspection_arguments(source_url.as_str(), &self.options);
             let output = self
                 .runner
                 .run(&arguments)
@@ -103,12 +122,10 @@ fn validate_source_url(source: &str) -> Result<Url, InspectError> {
     Ok(url)
 }
 
-fn inspection_arguments(source: &str) -> Vec<OsString> {
-    [
+fn inspection_arguments(source: &str, options: &YtDlpOptions) -> Vec<OsString> {
+    let mut arguments = [
         "--ignore-config",
         "--no-plugin-dirs",
-        "--no-js-runtimes",
-        "--no-remote-components",
         "--no-exec",
         "--no-cache-dir",
         "--no-update",
@@ -116,12 +133,14 @@ fn inspection_arguments(source: &str) -> Vec<OsString> {
         "--no-warnings",
         "--simulate",
         "--dump-single-json",
-        "--",
-        source,
     ]
     .into_iter()
     .map(OsString::from)
-    .collect()
+    .collect();
+    options.append_engine_arguments(&mut arguments);
+    arguments.push(OsString::from("--"));
+    arguments.push(OsString::from(source));
+    arguments
 }
 
 fn map_process_error(error: ProcessError) -> InspectError {
@@ -143,8 +162,6 @@ fn classify_engine_failure(stderr: &[u8]) -> InspectError {
             "too many requests",
             "rate limit",
             "rate-limit",
-            "confirm you're not a bot",
-            "confirm you’re not a bot",
             "content isn't available, try again later",
         ],
     ) {
@@ -177,6 +194,8 @@ fn classify_engine_failure(stderr: &[u8]) -> InspectError {
             "age-restricted",
             "age restricted",
             "use --cookies",
+            "confirm you're not a bot",
+            "confirm you’re not a bot",
             "private video",
         ],
     ) {
@@ -554,7 +573,13 @@ mod tests {
         assert!(strings.iter().any(|value| value == "--simulate"));
         assert!(strings.iter().any(|value| value == "--ignore-config"));
         assert!(strings.iter().any(|value| value == "--no-plugin-dirs"));
-        assert!(strings.iter().any(|value| value == "--no-js-runtimes"));
+        assert!(strings.iter().any(|value| value == "--js-runtimes"));
+        assert!(strings.iter().any(|value| value.starts_with("deno:")));
+        assert!(
+            strings
+                .iter()
+                .any(|value| value == "--no-remote-components")
+        );
         assert_eq!(strings[strings.len() - 2], "--");
         assert_eq!(
             strings.last().expect("URL should be the final argument"),
@@ -618,7 +643,10 @@ mod tests {
                 "ERROR: The uploader has not made this video available in your country",
                 "geo_restricted",
             ),
-            ("ERROR: Sign in to confirm you're not a bot", "rate_limited"),
+            (
+                "ERROR: Sign in to confirm you're not a bot",
+                "authentication_required",
+            ),
             ("ERROR: This video is not available", "content_unavailable"),
             (
                 "ERROR: Unable to download webpage: HTTP Error 403: Forbidden",

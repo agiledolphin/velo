@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   DownloadTask,
   DownloadEvent,
@@ -48,6 +48,16 @@ function isInspectFailure(value: unknown): value is InspectFailure {
     "message" in value &&
     typeof value.message === "string"
   );
+}
+
+export class VeloApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = "VeloApiError";
+  }
 }
 
 export interface InspectMediaOptions {
@@ -98,12 +108,33 @@ export async function inspectMedia(
   } catch (error) {
     if (isInspectionAbort(error)) throw error;
     if (isInspectFailure(error)) {
-      throw new Error(error.message);
+      throw new VeloApiError(error.message, error.code);
     }
 
     throw new Error("暂时无法解析这个地址，请稍后再试。");
   } finally {
     signal.removeEventListener("abort", handleAbort);
+  }
+}
+
+export async function chooseCookieFile(): Promise<boolean | null> {
+  if (!isTauri()) {
+    throw new Error("请在 Velo 桌面开发模式中选择 Cookie 文件。");
+  }
+  const path = await open({
+    title: "选择从浏览器导出的 Cookie 文件",
+    multiple: false,
+    directory: false,
+    filters: [{ name: "Netscape Cookie 文件", extensions: ["txt"] }],
+  });
+  if (!path || Array.isArray(path)) return null;
+  try {
+    return await invoke<boolean>("configure_cookie_file", { path });
+  } catch (error) {
+    if (isInspectFailure(error)) {
+      throw new VeloApiError(error.message, error.code);
+    }
+    throw new Error("无法使用这个 Cookie 文件，请重新导出后再试。");
   }
 }
 

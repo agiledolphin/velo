@@ -18,6 +18,8 @@ use crate::{
     domain::{DownloadFailure, DownloadProgress, DownloadTask},
 };
 
+use super::{YtDlpOptions, configured_deno_path};
+
 const PROGRESS_PREFIX: &str = "VELO_PROGRESS:";
 const PROCESSING_MARKER: &str = "VELO_PROCESSING";
 const MAX_STDOUT_BYTES: usize = 32 * 1024 * 1024;
@@ -27,6 +29,7 @@ const MAX_LINE_BYTES: usize = 64 * 1024;
 pub struct YtDlpDownloader {
     executable: PathBuf,
     ffmpeg: PathBuf,
+    options: YtDlpOptions,
 }
 
 pub fn configured_ffmpeg_path() -> PathBuf {
@@ -84,7 +87,21 @@ impl YtDlpDownloader {
             "download executable path must be absolute"
         );
         assert!(ffmpeg.is_absolute(), "FFmpeg path must be absolute");
-        Self { executable, ffmpeg }
+        Self {
+            executable,
+            ffmpeg,
+            options: YtDlpOptions::new(configured_deno_path()),
+        }
+    }
+
+    pub fn with_options(
+        executable: impl Into<PathBuf>,
+        ffmpeg: impl Into<PathBuf>,
+        options: YtDlpOptions,
+    ) -> Self {
+        let mut downloader = Self::new(executable, ffmpeg);
+        downloader.options = options;
+        downloader
     }
 }
 
@@ -108,7 +125,7 @@ impl YtDlpDownloader {
     ) -> Result<DownloadOutcome, DownloadFailure> {
         let mut command = Command::new(&self.executable);
         command
-            .args(download_arguments(task, &self.ffmpeg))
+            .args(download_arguments(task, &self.ffmpeg, &self.options))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -144,7 +161,7 @@ impl YtDlpDownloader {
     }
 }
 
-fn download_arguments(task: &DownloadTask, ffmpeg: &Path) -> Vec<OsString> {
+fn download_arguments(task: &DownloadTask, ffmpeg: &Path, options: &YtDlpOptions) -> Vec<OsString> {
     let format_selector = if task.has_video && !task.has_audio {
         format!("{}+bestaudio/{}", task.format_id, task.format_id)
     } else {
@@ -153,8 +170,6 @@ fn download_arguments(task: &DownloadTask, ffmpeg: &Path) -> Vec<OsString> {
     let mut arguments = [
         "--ignore-config",
         "--no-plugin-dirs",
-        "--no-js-runtimes",
-        "--no-remote-components",
         "--no-exec",
         "--no-cache-dir",
         "--no-update",
@@ -178,6 +193,7 @@ fn download_arguments(task: &DownloadTask, ffmpeg: &Path) -> Vec<OsString> {
     .map(OsString::from)
     .collect::<Vec<_>>();
     arguments.push(ffmpeg.as_os_str().to_owned());
+    options.append_engine_arguments(&mut arguments);
     for value in [
         "--merge-output-format",
         task.output_extension.as_str(),
@@ -313,7 +329,11 @@ mod tests {
 
     #[test]
     fn uses_a_fixed_download_argument_contract() {
-        let arguments = download_arguments(&task(), Path::new("/trusted/ffmpeg"));
+        let arguments = download_arguments(
+            &task(),
+            Path::new("/trusted/ffmpeg"),
+            &YtDlpOptions::new(configured_deno_path()),
+        );
         let strings = arguments
             .iter()
             .map(|value| value.to_string_lossy())
@@ -340,7 +360,11 @@ mod tests {
     fn keeps_combined_formats_as_a_single_selection() {
         let mut task = task();
         task.has_audio = true;
-        let arguments = download_arguments(&task, Path::new("/trusted/ffmpeg"));
+        let arguments = download_arguments(
+            &task,
+            Path::new("/trusted/ffmpeg"),
+            &YtDlpOptions::new(configured_deno_path()),
+        );
         let strings = arguments
             .iter()
             .map(|value| value.to_string_lossy())

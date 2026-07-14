@@ -9,7 +9,13 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use super::process_runner::{ProcessError, ProcessRunner};
+use super::{
+    process_runner::{ProcessError, ProcessRunner},
+    yt_dlp_options::YtDlpOptions,
+};
+
+#[cfg(test)]
+use super::yt_dlp_options::configured_deno_path;
 
 const FRAME_FORMAT: &str = "bestvideo[height<=480]/best[height<=480]/worstvideo/worst";
 const FRAME_FILTER: &str = "scale=640:-2:force_original_aspect_ratio=decrease";
@@ -24,6 +30,7 @@ pub struct RepresentativeFrameGenerator {
     yt_dlp: Arc<dyn ProcessRunner>,
     ffmpeg: Arc<dyn ProcessRunner>,
     cache: RepresentativeFrameCache,
+    options: YtDlpOptions,
 }
 
 #[derive(Clone, Default)]
@@ -53,6 +60,7 @@ impl RepresentativeFrameError {
 }
 
 impl RepresentativeFrameGenerator {
+    #[cfg(test)]
     pub fn with_cache(
         yt_dlp: impl ProcessRunner,
         ffmpeg: impl ProcessRunner,
@@ -62,6 +70,21 @@ impl RepresentativeFrameGenerator {
             yt_dlp: Arc::new(yt_dlp),
             ffmpeg: Arc::new(ffmpeg),
             cache,
+            options: YtDlpOptions::new(configured_deno_path()),
+        }
+    }
+
+    pub fn with_options(
+        yt_dlp: impl ProcessRunner,
+        ffmpeg: impl ProcessRunner,
+        cache: RepresentativeFrameCache,
+        options: YtDlpOptions,
+    ) -> Self {
+        Self {
+            yt_dlp: Arc::new(yt_dlp),
+            ffmpeg: Arc::new(ffmpeg),
+            cache,
+            options,
         }
     }
 
@@ -75,7 +98,7 @@ impl RepresentativeFrameGenerator {
             None => {
                 let stream_output = self
                     .yt_dlp
-                    .run(&stream_arguments(source.as_str()))
+                    .run(&stream_arguments(source.as_str(), &self.options))
                     .await
                     .map_err(map_process_error)?;
                 if !stream_output.success {
@@ -137,12 +160,10 @@ impl RepresentativeFrameCache {
     }
 }
 
-fn stream_arguments(source: &str) -> Vec<OsString> {
-    [
+fn stream_arguments(source: &str, options: &YtDlpOptions) -> Vec<OsString> {
+    let mut arguments = [
         "--ignore-config",
         "--no-plugin-dirs",
-        "--no-js-runtimes",
-        "--no-remote-components",
         "--no-exec",
         "--no-cache-dir",
         "--no-update",
@@ -153,12 +174,14 @@ fn stream_arguments(source: &str) -> Vec<OsString> {
         FRAME_FORMAT,
         "--print",
         STREAM_TEMPLATE,
-        "--",
-        source,
     ]
     .into_iter()
     .map(OsString::from)
-    .collect()
+    .collect();
+    options.append_engine_arguments(&mut arguments);
+    arguments.push(OsString::from("--"));
+    arguments.push(OsString::from(source));
+    arguments
 }
 
 fn frame_arguments(stream: &StreamReference) -> Vec<OsString> {
@@ -322,10 +345,13 @@ mod tests {
 
     #[test]
     fn uses_hardened_stream_and_frame_arguments() {
-        let stream_arguments = stream_arguments("https://video.example/watch?v=1&x=true")
-            .into_iter()
-            .map(|value| value.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        let stream_arguments = stream_arguments(
+            "https://video.example/watch?v=1&x=true",
+            &YtDlpOptions::new(configured_deno_path()),
+        )
+        .into_iter()
+        .map(|value| value.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
         assert!(stream_arguments.iter().any(|value| value == "--no-exec"));
         assert!(stream_arguments.iter().any(|value| value == FRAME_FORMAT));
         assert_eq!(stream_arguments[stream_arguments.len() - 2], "--");

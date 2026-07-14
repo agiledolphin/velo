@@ -103,7 +103,10 @@ async fn send_request(url: &Url) -> Result<reqwest::Response, ThumbnailError> {
         .redirect(reqwest::redirect::Policy::none())
         .timeout(REQUEST_TIMEOUT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent("Velo/0.1 thumbnail fetcher")
+        .user_agent(format!(
+            "Velo/{} thumbnail fetcher",
+            env!("CARGO_PKG_VERSION")
+        ))
         .resolve_to_addrs(host, &addresses)
         .build()
         .map_err(|_| ThumbnailError::connection_failed())?;

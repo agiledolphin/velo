@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 interface TauriConfig {
+  version: string;
   build: {
     beforeDevCommand: string;
     beforeBuildCommand: string;
@@ -41,7 +42,29 @@ async function loadCompatibilityWorkflow(): Promise<string> {
   );
 }
 
+async function loadProjectFile(path: string): Promise<string> {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  return readFile(resolve(directory, `../${path}`), "utf8");
+}
+
 describe("Tauri sidecar bundle configuration", () => {
+  it("keeps the release version consistent across the application", async () => {
+    const config = await loadTauriConfig();
+    const packageJson = JSON.parse(
+      await loadProjectFile("package.json"),
+    ) as { version: string };
+    const cargoManifest = await loadProjectFile("src-tauri/Cargo.toml");
+    const app = await loadProjectFile("src/App.tsx");
+
+    expect(packageJson.version).toBe("0.2.0");
+    expect(config.version).toBe(packageJson.version);
+    expect(cargoManifest).toContain(`version = "${packageJson.version}"`);
+    expect(app).toContain(
+      `<p className="build-label">${packageJson.version}</p>`,
+    );
+    expect(app).not.toContain("PREVIEW ·");
+  });
+
   it("prepares the pinned engine before desktop development and builds", async () => {
     const config = await loadTauriConfig();
 
@@ -50,6 +73,7 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(config.bundle.externalBin).toEqual([
       "binaries/yt-dlp",
       "binaries/ffmpeg",
+      "binaries/deno",
     ]);
     expect(config.bundle.resources).toContain("resources/THIRD_PARTY_NOTICES.md");
   });
@@ -67,7 +91,9 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(workflow).toContain("dpkg-deb --contents");
     expect(workflow).toContain("7z l");
     expect(workflow).toContain("ffmpeg.exe");
+    expect(workflow).toContain("deno.exe");
     expect(workflow).toContain("grep -q '/ffmpeg$'");
+    expect(workflow).toContain("grep -q '/deno$'");
     expect(workflow).toContain("actions/upload-artifact@v7");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).toContain('      - "v*"');
