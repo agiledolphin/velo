@@ -535,6 +535,12 @@ input:disabled {
   opacity: 0.58;
 }
 
+.download-button.is-cancel {
+  border-color: rgba(143, 59, 50, 0.28);
+  background: rgba(143, 59, 50, 0.08);
+  color: var(--danger);
+}
+
 .download-prepared {
   display: grid;
   gap: 3px;
@@ -564,6 +570,81 @@ input:disabled {
   color: var(--muted);
 }
 
+.download-progress,
+.download-result {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(45, 113, 128, 0.06);
+  font-size: 10px;
+}
+
+.download-progress-copy,
+.download-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.download-progress-copy strong,
+.download-result strong {
+  color: var(--current);
+  font-size: 11px;
+}
+
+.download-progress-copy span,
+.download-metrics,
+.download-result p {
+  color: var(--muted);
+}
+
+.progress-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(45, 113, 128, 0.13);
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--current);
+  transition: width 180ms ease-out;
+}
+
+.progress-track.is-indeterminate span {
+  width: 38%;
+  animation: progress-indeterminate 1.1s ease-in-out infinite;
+}
+
+.download-result span {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.download-result p {
+  margin: 0;
+}
+
+.download-result.is-complete {
+  background: rgba(45, 113, 128, 0.08);
+}
+
+.download-result.is-failed {
+  background: rgba(143, 59, 50, 0.07);
+}
+
+.download-result.is-failed strong {
+  color: var(--danger);
+}
+
 .download-error {
   margin-top: 10px;
   font-size: 10px;
@@ -576,6 +657,11 @@ input:disabled {
 
 @keyframes thumbnail-scan {
   to { transform: translateX(100%); }
+}
+
+@keyframes progress-indeterminate {
+  from { transform: translateX(-105%); }
+  to { transform: translateX(265%); }
 }
 
 @keyframes spin {

@@ -1,7 +1,9 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
 import type {
   DownloadTask,
+  DownloadEvent,
   InspectFailure,
   MediaFormat,
   MediaInfo,
@@ -157,4 +159,34 @@ export async function fetchThumbnailDataUrl(url: string): Promise<string> {
   }
 
   return invoke<string>("fetch_thumbnail", { url });
+}
+
+export async function startDownload(
+  task: DownloadTask,
+  expectedExtension: string,
+): Promise<DownloadTask> {
+  try {
+    return await invoke<DownloadTask>("start_download", {
+      taskId: task.id,
+      sourceUrl: task.sourceUrl,
+      mediaTitle: task.mediaTitle,
+      formatId: task.formatId,
+      destinationPath: task.destinationPath,
+      expectedExtension,
+    });
+  } catch (error) {
+    if (isInspectFailure(error)) throw new Error(error.message);
+    throw new Error("无法开始下载，请重新选择保存位置后再试。");
+  }
+}
+
+export async function cancelDownload(taskId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_download", { taskId });
+}
+
+export function onDownloadEvent(
+  handler: (event: DownloadEvent) => void,
+): Promise<UnlistenFn> {
+  if (!isTauri()) return Promise.resolve(() => undefined);
+  return listen<DownloadEvent>("download-event", ({ payload }) => handler(payload));
 }

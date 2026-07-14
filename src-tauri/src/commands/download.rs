@@ -1,6 +1,14 @@
-use serde::Serialize;
+use std::path::Path;
 
-use crate::domain::{DownloadModelError, DownloadTask, DownloadTaskId, suggested_file_name};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
+
+use crate::{
+    application::{DownloadCoordinator, StartDownloadError},
+    domain::{DownloadModelError, DownloadTask, DownloadTaskId, suggested_file_name},
+};
+
+const DOWNLOAD_EVENT_NAME: &str = "download-event";
 
 #[derive(Debug, Serialize)]
 pub struct PrepareDownloadError {
@@ -41,6 +49,17 @@ impl From<DownloadModelError> for PrepareDownloadError {
     }
 }
 
+impl From<StartDownloadError> for PrepareDownloadError {
+    fn from(error: StartDownloadError) -> Self {
+        match error {
+            StartDownloadError::AlreadyRunning => Self {
+                code: "download_already_running",
+                message: "这个下载任务已经在运行。",
+            },
+        }
+    }
+}
+
 #[tauri::command]
 pub fn suggest_download_file_name(title: String, extension: String) -> DownloadFileSuggestion {
     let file_name = suggested_file_name(&title, &extension);
@@ -74,6 +93,52 @@ pub fn prepare_download_task(
         &expected_extension,
     )
     .map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn start_download(
+    task_id: String,
+    source_url: String,
+    media_title: String,
+    format_id: String,
+    destination_path: String,
+    expected_extension: String,
+    app: AppHandle,
+    coordinator: State<'_, DownloadCoordinator>,
+) -> Result<DownloadTask, PrepareDownloadError> {
+    let task = DownloadTask::new(
+        DownloadTaskId::new(task_id)?,
+        source_url,
+        media_title,
+        format_id,
+        destination_path,
+        &expected_extension,
+    )?;
+    if Path::new(&task.destination_path).exists() {
+        return Err(PrepareDownloadError {
+            code: "destination_exists",
+            message: "目标文件已存在，请重新选择保存位置。",
+        });
+    }
+
+    let run = coordinator.begin(&task.id)?;
+    let coordinator = (*coordinator).clone();
+    let running_task = task.clone();
+    tauri::async_runtime::spawn(async move {
+        coordinator
+            .run(running_task, run, |event| {
+                let _ = app.emit(DOWNLOAD_EVENT_NAME, event);
+            })
+            .await;
+    });
+
+    Ok(task)
+}
+
+#[tauri::command]
+pub fn cancel_download(task_id: String, coordinator: State<'_, DownloadCoordinator>) -> bool {
+    DownloadTaskId::new(task_id.as_str()).is_ok() && coordinator.cancel(&task_id)
 }
 
 #[cfg(test)]

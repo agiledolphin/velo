@@ -28,6 +28,10 @@ impl DownloadTaskId {
 
         Ok(Self(value))
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -213,6 +217,29 @@ impl DownloadProgress {
 pub struct DownloadFailure {
     pub code: String,
     pub message: String,
+}
+
+impl DownloadFailure {
+    pub fn engine_unavailable() -> Self {
+        Self {
+            code: "download_engine_unavailable".into(),
+            message: "未找到下载引擎，请重新安装 yt-dlp。".into(),
+        }
+    }
+
+    pub fn failed() -> Self {
+        Self {
+            code: "download_failed".into(),
+            message: "下载失败，请确认页面仍可访问后重试。".into(),
+        }
+    }
+
+    pub fn output_too_large() -> Self {
+        Self {
+            code: "download_output_too_large".into(),
+            message: "下载引擎返回了过多诊断信息，任务已停止。".into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

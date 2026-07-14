@@ -30,3 +30,24 @@ export interface DownloadTask {
   formatId: string;
   destinationPath: string;
 }
+
+export interface DownloadProgress {
+  downloadedBytes: number;
+  totalBytes: number | null;
+  speedBytesPerSecond: number | null;
+  etaSeconds: number | null;
+}
+
+export interface DownloadFailure {
+  code: string;
+  message: string;
+}
+
+export type DownloadEvent = {
+  taskId: string;
+  sequence: number;
+} & (
+  | { type: "queued" | "started" | "processing" | "completed" | "cancelled" }
+  | { type: "progress"; progress: DownloadProgress }
+  | { type: "failed"; error: DownloadFailure }
+);

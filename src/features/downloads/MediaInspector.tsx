@@ -1,11 +1,14 @@
 import { FormEvent, useEffect, useId, useRef, useState } from "react";
-import type { DownloadTask, MediaInfo } from "../../lib/media";
+import type { DownloadEvent, DownloadTask, MediaInfo } from "../../lib/media";
 import { normalizeWebUrl } from "../../lib/url";
 import {
+  cancelDownload,
   chooseDownloadTarget,
   fetchThumbnailDataUrl,
   inspectMedia,
   isInspectionAbort,
+  onDownloadEvent,
+  startDownload,
 } from "../../lib/velo-api";
 
 type InspectorState =
@@ -26,10 +29,27 @@ function formatFileSize(bytes: number | null) {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
+function formatTransferSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatSpeed(bytesPerSecond: number | null) {
+  if (bytesPerSecond === null) return "正在计算速度";
+  return `${formatTransferSize(bytesPerSecond)}/s`;
+}
+
+function formatEta(seconds: number | null) {
+  if (seconds === null) return "剩余时间待定";
+  if (seconds < 60) return `约 ${seconds} 秒`;
+  return `约 ${Math.ceil(seconds / 60)} 分钟`;
+}
+
 export function MediaInspector() {
   const inputId = useId();
   const [url, setUrl] = useState("");
   const [state, setState] = useState<InspectorState>({ status: "idle" });
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const activeRequest = useRef<{
     id: string;
     controller: AbortController;
@@ -53,6 +73,7 @@ export function MediaInspector() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (downloadBusy) return;
     const normalizedUrl = normalizeWebUrl(url);
 
     if (!normalizedUrl) {
@@ -101,7 +122,7 @@ export function MediaInspector() {
             autoComplete="url"
             placeholder="https://example.com/video"
             value={url}
-            disabled={state.status === "loading"}
+            disabled={state.status === "loading" || downloadBusy}
             aria-describedby={state.status === "error" ? `${inputId}-error` : undefined}
             onChange={(event) => {
               setUrl(event.target.value);
@@ -116,9 +137,14 @@ export function MediaInspector() {
           <button
             className={state.status === "loading" ? "cancel-inspection" : undefined}
             type={state.status === "loading" ? "button" : "submit"}
+            disabled={downloadBusy}
             onClick={state.status === "loading" ? handleCancel : undefined}
           >
-            {state.status === "loading" ? "取消解析" : "解析视频"}
+            {downloadBusy
+              ? "下载进行中"
+              : state.status === "loading"
+                ? "取消解析"
+                : "解析视频"}
             <span aria-hidden="true">{state.status === "loading" ? "×" : "→"}</span>
           </button>
           <span className="capture-glint" aria-hidden="true" />
@@ -127,7 +153,7 @@ export function MediaInspector() {
 
       <div
         className={`inspector-status is-${state.status}`}
-        aria-live="polite"
+        aria-live={state.status === "ready" ? "off" : "polite"}
       >
         {state.status === "idle" && (
           <div className="empty-state">
@@ -158,24 +184,65 @@ export function MediaInspector() {
           </div>
         )}
 
-        {state.status === "ready" && <MediaResult media={state.media} />}
+        {state.status === "ready" && (
+          <MediaResult media={state.media} onBusyChange={setDownloadBusy} />
+        )}
       </div>
     </div>
   );
 }
 
-function MediaResult({ media }: { media: MediaInfo }) {
+function MediaResult({
+  media,
+  onBusyChange,
+}: {
+  media: MediaInfo;
+  onBusyChange: (busy: boolean) => void;
+}) {
   const [selectedFormatId, setSelectedFormatId] = useState(media.formats[0]?.id ?? "");
   const [preparing, setPreparing] = useState(false);
   const [preparedTask, setPreparedTask] = useState<DownloadTask | null>(null);
   const [prepareError, setPrepareError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [downloadEvent, setDownloadEvent] = useState<DownloadEvent | null>(null);
+  const activeTask = useRef<{ id: string; sequence: number } | null>(null);
   const selectedFormat = media.formats.find(({ id }) => id === selectedFormatId);
+  const downloadActive =
+    starting ||
+    downloadEvent?.type === "queued" ||
+    downloadEvent?.type === "started" ||
+    downloadEvent?.type === "progress" ||
+    downloadEvent?.type === "processing";
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onDownloadEvent((event) => {
+      const active = activeTask.current;
+      if (!active || event.taskId !== active.id || event.sequence <= active.sequence) return;
+      active.sequence = event.sequence;
+      setDownloadEvent(event);
+      if (["completed", "cancelled", "failed"].includes(event.type)) {
+        onBusyChange(false);
+      }
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onBusyChange]);
 
   async function handleChooseDestination() {
     if (!selectedFormat || preparing) return;
     setPreparing(true);
     setPrepareError(null);
     setPreparedTask(null);
+    setDownloadEvent(null);
+    activeTask.current = null;
     try {
       const task = await chooseDownloadTarget(media, selectedFormat);
       if (task) setPreparedTask(task);
@@ -184,6 +251,29 @@ function MediaResult({ media }: { media: MediaInfo }) {
     } finally {
       setPreparing(false);
     }
+  }
+
+  async function handleStartDownload() {
+    if (!preparedTask || !selectedFormat || starting) return;
+    activeTask.current = { id: preparedTask.id, sequence: -1 };
+    setStarting(true);
+    setPrepareError(null);
+    onBusyChange(true);
+    try {
+      await startDownload(preparedTask, selectedFormat.container);
+    } catch (error) {
+      activeTask.current = null;
+      onBusyChange(false);
+      setPrepareError(error instanceof Error ? error.message : "无法开始下载。");
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  async function handleCancelDownload() {
+    if (!activeTask.current) return;
+    const cancelled = await cancelDownload(activeTask.current.id).catch(() => false);
+    if (!cancelled) setPrepareError("无法取消这个任务，请稍后再试。");
   }
 
   return (
@@ -205,6 +295,7 @@ function MediaResult({ media }: { media: MediaInfo }) {
               name="media-format"
               value={format.id}
               checked={format.id === selectedFormatId}
+              disabled={downloadActive}
               onChange={() => {
                 setSelectedFormatId(format.id);
                 setPreparedTask(null);
@@ -220,22 +311,96 @@ function MediaResult({ media }: { media: MediaInfo }) {
       </div>
 
       {preparedTask && (
-        <div className="download-prepared" role="status">
-          <strong>保存位置已准备</strong>
-          <span title={preparedTask.destinationPath}>{preparedTask.destinationPath}</span>
-          <p>下一步将接入真实下载与进度显示。</p>
-        </div>
+        <DownloadStatus task={preparedTask} event={downloadEvent} starting={starting} />
       )}
       {prepareError && <p className="download-error" role="alert">{prepareError}</p>}
-      <button
-        className="download-button"
-        type="button"
-        disabled={!selectedFormat || preparing}
-        onClick={handleChooseDestination}
-      >
-        {preparing ? "正在打开保存位置…" : "选择保存位置"}
-      </button>
+      {starting ? (
+        <button className="download-button" type="button" disabled>
+          正在开始下载…
+        </button>
+      ) : downloadActive ? (
+        <button className="download-button is-cancel" type="button" onClick={handleCancelDownload}>
+          取消下载
+        </button>
+      ) : preparedTask && !downloadEvent ? (
+        <button
+          className="download-button"
+          type="button"
+          disabled={starting}
+          onClick={handleStartDownload}
+        >
+          {starting ? "正在开始下载…" : "开始下载"}
+        </button>
+      ) : (
+        <button
+          className="download-button"
+          type="button"
+          disabled={!selectedFormat || preparing}
+          onClick={handleChooseDestination}
+        >
+          {preparing ? "正在打开保存位置…" : "选择保存位置"}
+        </button>
+      )}
     </article>
+  );
+}
+
+function DownloadStatus({
+  task,
+  event,
+  starting,
+}: {
+  task: DownloadTask;
+  event: DownloadEvent | null;
+  starting: boolean;
+}) {
+  if (!event) {
+    return (
+      <div className="download-prepared" role="status">
+        <strong>{starting ? "正在创建下载任务" : "保存位置已准备"}</strong>
+        <span title={task.destinationPath}>{task.destinationPath}</span>
+        <p>{starting ? "正在启动 yt-dlp…" : "确认格式后即可开始下载。"}</p>
+      </div>
+    );
+  }
+
+  if (event.type === "failed") {
+    return <div className="download-result is-failed" role="alert"><strong>下载失败</strong><p>{event.error.message}</p></div>;
+  }
+  if (event.type === "completed") {
+    return <div className="download-result is-complete" role="status"><strong>下载完成</strong><span title={task.destinationPath}>{task.destinationPath}</span></div>;
+  }
+  if (event.type === "cancelled") {
+    return <div className="download-result" role="status"><strong>下载已取消</strong><p>未完成的临时文件将在后续清理功能中处理。</p></div>;
+  }
+
+  const progress = event.type === "progress" ? event.progress : null;
+  const fraction =
+    progress?.totalBytes && progress.totalBytes > 0
+      ? Math.min(progress.downloadedBytes / progress.totalBytes, 1)
+      : null;
+
+  return (
+    <div className="download-progress">
+      <div className="download-progress-copy">
+        <strong>{event.type === "processing" ? "正在处理文件" : "正在下载"}</strong>
+        <span>{progress ? formatTransferSize(progress.downloadedBytes) : "准备连接…"}</span>
+      </div>
+      <div
+        className={`progress-track${fraction === null ? " is-indeterminate" : ""}`}
+        role="progressbar"
+        aria-label="下载进度"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={fraction === null ? undefined : Math.round(fraction * 100)}
+      >
+        <span style={fraction === null ? undefined : { width: `${fraction * 100}%` }} />
+      </div>
+      <div className="download-metrics">
+        <span>{formatSpeed(progress?.speedBytesPerSecond ?? null)}</span>
+        <span>{formatEta(progress?.etaSeconds ?? null)}</span>
+      </div>
+    </div>
   );
 }
 
