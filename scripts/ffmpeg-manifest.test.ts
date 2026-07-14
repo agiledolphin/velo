@@ -10,10 +10,13 @@ import {
 describe("FFmpeg manifest", () => {
   it("maps supported targets to fixed release assets", () => {
     const arm = resolveFfmpegAssetForTarget("aarch64-apple-darwin");
-    expect(arm.assetName).toBe("ffmpeg81arm.zip");
-    expect(arm.version).toBe("8.1");
+    expect(arm.assetName).toBe("ffmpeg-macos-arm64-8.1.2.zip");
+    expect(arm.version).toBe("8.1.2");
     expect(ffmpegDownloadUrl(arm)).toBe(
-      "https://www.osxexperts.net/ffmpeg81arm.zip",
+      "https://ffmpeg.martin-riedl.de/download/macos/arm64/1783011502_8.1.2/ffmpeg.zip",
+    );
+    expect(resolveFfmpegAssetForTarget("x86_64-unknown-linux-gnu").version).toBe(
+      "8.1.2",
     );
     expect(resolveFfmpegAssetForTarget("x86_64-pc-windows-msvc").assetName).toBe(
       "ffmpeg-win32-x64",

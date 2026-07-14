@@ -15,28 +15,36 @@ export interface FfmpegAsset {
 
 const STATIC_RELEASE =
   "https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1";
+const MARTIN_RIEDL_RELEASE = "https://ffmpeg.martin-riedl.de/download";
 
 const ASSETS: Record<string, FfmpegAsset> = {
-  "darwin-arm64": {
-    assetName: "ffmpeg81arm.zip",
-    executableName: "ffmpeg",
-    version: "8.1",
-    downloadUrl: "https://www.osxexperts.net/ffmpeg81arm.zip",
-    archiveSha256: "ebb82529562b71170807bbc6b0e7eb4f0b13af8cbb0e085bb9e8f6fe709598ad",
-    binarySha256: "9a08d61f9328e8164ba560ee7a79958e357307fcfeea6fe626b7d66cdc287028",
-    archiveEntry: "ffmpeg",
-  },
-  "darwin-x64": rawStaticAsset(
-    "ffmpeg-darwin-x64",
-    "ebdddc936f61e14049a2d4b549a412b8a40deeff6540e58a9f2a2da9e6b18894",
+  "darwin-arm64": martinRiedlAsset(
+    "macos",
+    "arm64",
+    "1783011502_8.1.2",
+    "ef1aa60006c7b77ce170c1608c08d8e4ba1c30c5746f2ac986ded932d0ac2c3c",
+    "eaf91238e104dd0e262bc6510e25061855cc99a6955a721b0ac99660d58c473d",
   ),
-  "linux-arm64": rawStaticAsset(
-    "ffmpeg-linux-arm64",
-    "6bb182d0d75d23028db82e9e4f723ca69b853d055698486e6984ddb2c06fb8ce",
+  "darwin-x64": martinRiedlAsset(
+    "macos",
+    "amd64",
+    "1783018342_8.1.2",
+    "a52ef43883f44c219766d4b3bdde4e635b35465d0b704c01c3a0566b59775df9",
+    "1ca59dda73668c59898a0b305afd8a88817a989187f222ec62d64e775d614d23",
   ),
-  "linux-x64": rawStaticAsset(
-    "ffmpeg-linux-x64",
-    "e7e7fb30477f717e6f55f9180a70386c62677ef8a4d4d1a5d948f4098aa3eb99",
+  "linux-arm64": martinRiedlAsset(
+    "linux",
+    "arm64",
+    "1783010599_8.1.2",
+    "ab9e16864b6bf4ae7e13bbdbdc29621be11a5c547c57af8d4250e9fa2f5e6461",
+    "93a3684e7467d33881f8fa39e3b8408248d4f95fb2e9f6b18383edcdbd70f163",
+  ),
+  "linux-x64": martinRiedlAsset(
+    "linux",
+    "amd64",
+    "1783011670_8.1.2",
+    "56452c0bfc4ee0325cd615d62f46ba8264f62eed34f727c2224c6c84fa7b8719",
+    "bea0dfb96f7223b1be497cf11ccda9ddd9a39103b948b342bb6db1c60a56be12",
   ),
   "win32-x64": rawStaticAsset(
     "ffmpeg-win32-x64",
@@ -44,6 +52,24 @@ const ASSETS: Record<string, FfmpegAsset> = {
     "ffmpeg.exe",
   ),
 };
+
+function martinRiedlAsset(
+  platform: "linux" | "macos",
+  architecture: "amd64" | "arm64",
+  release: string,
+  archiveSha256: string,
+  binarySha256: string,
+): FfmpegAsset {
+  return {
+    assetName: `ffmpeg-${platform}-${architecture}-8.1.2.zip`,
+    executableName: "ffmpeg",
+    version: "8.1.2",
+    downloadUrl: `${MARTIN_RIEDL_RELEASE}/${platform}/${architecture}/${release}/ffmpeg.zip`,
+    archiveSha256,
+    binarySha256,
+    archiveEntry: "ffmpeg",
+  };
+}
 
 function rawStaticAsset(
   assetName: string,

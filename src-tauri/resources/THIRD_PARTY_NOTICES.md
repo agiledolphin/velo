@@ -11,8 +11,8 @@ Velo bundles separate media-processing executables and invokes them as child pro
 ## FFmpeg
 
 - Project and source: https://ffmpeg.org/
-- Apple Silicon build source: https://www.osxexperts.net/
-- Other platform build source: https://github.com/eugeneware/ffmpeg-static
+- macOS and Linux build source: https://ffmpeg.martin-riedl.de/
+- Windows build source: https://github.com/eugeneware/ffmpeg-static
 - License information: https://ffmpeg.org/legal.html
 
 The exact build asset and SHA-256 for each target are recorded in

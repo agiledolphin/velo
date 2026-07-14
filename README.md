@@ -34,7 +34,7 @@ bun run dev:desktop
 
 `engine:install` 会为当前平台下载项目固定的 yt-dlp 版本，校验 SHA-256 和版本后原子替换 `binaries/` 下的本地文件；该二进制不会提交到 Git。`dev:desktop` 会先重新校验，再启动 Tauri。
 
-桌面开发和发布构建会自动运行 `engine:prepare-sidecar`，根据 Tauri 的目标三元组复用或下载 yt-dlp 与 FFmpeg，校验后写入 Git 忽略的 `src-tauri/binaries/`。Apple Silicon 使用原生 FFmpeg 8.1；第三方来源和许可提示随应用资源一起打包。构建应用包：
+桌面开发和发布构建会自动运行 `engine:prepare-sidecar`，根据 Tauri 的目标三元组复用或下载 yt-dlp 与 FFmpeg，校验后写入 Git 忽略的 `src-tauri/binaries/`。macOS 与 Linux 使用固定版本的 FFmpeg 8.1.2 原生架构构建；第三方来源和许可提示随应用资源一起打包。构建应用包：
 
 ```bash
 bun run build:desktop
