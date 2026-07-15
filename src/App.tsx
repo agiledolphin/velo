@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandMark } from "./components/BrandMark";
 import { MediaInspector } from "./features/downloads/MediaInspector";
-import { SettingsView } from "./features/settings/SettingsView";
+import {
+  SettingsView,
+  type SettingsSection,
+} from "./features/settings/SettingsView";
 import {
   MAX_WORKSPACE_TABS,
   activeTabAfterClose,
@@ -20,6 +23,7 @@ import {
 
 export default function App() {
   const [view, setView] = useState<"home" | "settings">("home");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("storage");
   const nextTabSequence = useRef(2);
   const inspectionScheduler = useRef(
     new TaskScheduler(DEFAULT_MAX_CONCURRENT_INSPECTIONS),
@@ -245,7 +249,10 @@ export default function App() {
                     tabId={tab.id}
                     active={active && view === "home"}
                     scheduler={inspectionScheduler.current}
-                    onOpenSettings={() => setView("settings")}
+                    onOpenSettings={(section) => {
+                      if (section) setSettingsSection(section);
+                      setView("settings");
+                    }}
                     onSnapshotChange={handleTabSnapshot}
                   />
                 </div>
@@ -255,7 +262,13 @@ export default function App() {
         </div>
       </section>
 
-      {view === "settings" && <SettingsView onBack={() => setView("home")} />}
+      {view === "settings" && (
+        <SettingsView
+          initialSection={settingsSection}
+          onSectionChange={setSettingsSection}
+          onBack={() => setView("home")}
+        />
+      )}
     </main>
   );
 }

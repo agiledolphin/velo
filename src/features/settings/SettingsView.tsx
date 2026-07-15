@@ -19,7 +19,11 @@ import {
 
 interface SettingsViewProps {
   onBack: () => void;
+  initialSection: SettingsSection;
+  onSectionChange: (section: SettingsSection) => void;
 }
+
+export type SettingsSection = "storage" | "access" | "history";
 
 const statusCopy: Record<CookieFileStatus, string> = {
   notConfigured: "尚未配置",
@@ -29,9 +33,9 @@ const statusCopy: Record<CookieFileStatus, string> = {
 };
 
 const settingsSections = [
-  { id: "sites", label: "站点" },
-  { id: "downloads", label: "下载" },
-  { id: "history", label: "下载历史" },
+  { id: "storage", label: "保存位置" },
+  { id: "access", label: "网站访问" },
+  { id: "history", label: "历史记录" },
 ] as const;
 
 function fileName(path: string | null) {
@@ -39,8 +43,8 @@ function fileName(path: string | null) {
   return path.split(/[\\/]/).pop() || path;
 }
 
-export function SettingsView({ onBack }: SettingsViewProps) {
-  const [activeSection, setActiveSection] = useState<"sites" | "downloads" | "history">("sites");
+export function SettingsView({ onBack, initialSection, onSectionChange }: SettingsViewProps) {
+  const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [history, setHistory] = useState<DownloadHistoryItem[]>(() => readDownloadHistory());
   const [confirmClear, setConfirmClear] = useState(false);
@@ -92,7 +96,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         </button>
         <div>
           <h1 id="settings-title">设置</h1>
-          <p>管理站点认证、下载记录与 Velo 的运行方式。</p>
+          <p>管理保存位置、网站访问与本地记录。</p>
         </div>
       </div>
 
@@ -106,6 +110,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               key={section.id}
               onClick={() => {
                 setActiveSection(section.id);
+                onSectionChange(section.id);
                 setConfirmClear(false);
               }}
             >
@@ -116,12 +121,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         </nav>
 
         <div className="settings-content">
-          {activeSection === "sites" ? (
+          {activeSection === "access" ? (
             <>
               <header className="settings-section-heading">
                 <div>
-                  <h2>站点</h2>
-                  <p>认证信息只会发送给对应的网站。</p>
+                  <h2>网站访问</h2>
+                  <p>管理 YouTube 等网站的登录与 Cookie。</p>
                 </div>
               </header>
 
@@ -192,7 +197,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             {error && <p className="settings-error" role="alert">{error}</p>}
               </section>
             </>
-          ) : activeSection === "downloads" ? (
+          ) : activeSection === "storage" ? (
             <DownloadSettings
               settings={settings}
               busy={busy}
@@ -237,15 +242,15 @@ function DownloadSettings({
     <>
       <header className="settings-section-heading">
         <div>
-          <h2>下载</h2>
-          <p>设置一键下载使用的默认保存位置。</p>
+          <h2>保存位置</h2>
+          <p>设置一键下载使用的默认目录。</p>
         </div>
       </header>
       <section className="site-settings download-settings" aria-labelledby="download-directory-title">
         <div className="site-settings-title">
           <div className="site-monogram" aria-hidden="true">↓</div>
           <div>
-            <h3 id="download-directory-title">默认下载目录</h3>
+            <h3 id="download-directory-title">默认保存位置</h3>
             <p>文件重名时会自动添加序号，不会覆盖已有文件。</p>
           </div>
         </div>

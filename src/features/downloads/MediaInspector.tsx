@@ -8,6 +8,7 @@ import type {
 import { InspectionGeneration } from "./inspection-generation";
 import type { TaskScheduler } from "./task-scheduler";
 import { recordCompletedDownload } from "../history/download-history";
+import type { SettingsSection } from "../settings/SettingsView";
 import {
   cancelDownload,
   chooseDownloadTarget,
@@ -71,7 +72,7 @@ export function MediaInspector({
   tabId: string;
   active: boolean;
   scheduler: TaskScheduler;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSection) => void;
   onSnapshotChange: (tabId: string, snapshot: InspectorTabSnapshot) => void;
 }) {
   const inputId = useId();
@@ -285,7 +286,7 @@ export function MediaInspector({
                 <button
                   className="cookie-button"
                   type="button"
-                  onClick={onOpenSettings}
+                  onClick={() => onOpenSettings("access")}
                 >
                   配置 YouTube Cookie
                 </button>
