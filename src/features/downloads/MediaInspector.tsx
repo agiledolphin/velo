@@ -7,6 +7,7 @@ import type {
 } from "../workspace/workspace-tabs";
 import { InspectionGeneration } from "./inspection-generation";
 import type { TaskScheduler } from "./task-scheduler";
+import { recordCompletedDownload } from "../history/download-history";
 import {
   cancelDownload,
   chooseDownloadTarget,
@@ -15,6 +16,7 @@ import {
   inspectMedia,
   isInspectionAbort,
   onDownloadEvent,
+  prepareDefaultDownloadTarget,
   startDownload,
   VeloApiError,
 } from "../../lib/velo-api";
@@ -313,12 +315,22 @@ function MediaResult({
 }) {
   const formatGroupName = useId();
   const [selectedFormatId, setSelectedFormatId] = useState(media.formats[0]?.id ?? "");
-  const [preparing, setPreparing] = useState(false);
+  const [preparing, setPreparing] = useState<"default" | "saveAs" | null>(null);
   const [preparedTask, setPreparedTask] = useState<DownloadTask | null>(null);
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [downloadEvent, setDownloadEvent] = useState<DownloadEvent | null>(null);
-  const activeTask = useRef<{ id: string; sequence: number } | null>(null);
+  const activeTask = useRef<{
+    id: string;
+    sequence: number;
+    history: {
+      title: string;
+      site: string;
+      formatLabel: string;
+      container: string;
+      destinationPath: string;
+    };
+  } | null>(null);
   const selectedFormat = media.formats.find(({ id }) => id === selectedFormatId);
   const downloadActive =
     starting ||
@@ -336,6 +348,11 @@ function MediaResult({
       active.sequence = event.sequence;
       setDownloadEvent(event);
       if (event.type === "completed") {
+        recordCompletedDownload({
+          id: active.id,
+          ...active.history,
+          completedAt: new Date().toISOString(),
+        });
         onActivityChange({ status: "completed", progress: 100 });
       } else if (event.type === "failed") {
         onActivityChange({ status: "error", progress: null });
@@ -364,32 +381,47 @@ function MediaResult({
     };
   }, [onActivityChange]);
 
-  async function handleChooseDestination() {
-    if (!selectedFormat || preparing) return;
-    setPreparing(true);
+  async function prepareAndStart(mode: "default" | "saveAs") {
+    if (!selectedFormat || preparing || starting) return;
+    setPreparing(mode);
     setPrepareError(null);
     setPreparedTask(null);
     setDownloadEvent(null);
     activeTask.current = null;
     onActivityChange({ status: "idle", progress: null });
     try {
-      const task = await chooseDownloadTarget(media, selectedFormat);
-      if (task) setPreparedTask(task);
+      const task = mode === "default"
+        ? await prepareDefaultDownloadTarget(media, selectedFormat)
+        : await chooseDownloadTarget(media, selectedFormat);
+      if (task) {
+        setPreparedTask(task);
+        await beginDownload(task);
+      }
     } catch (error) {
       setPrepareError(error instanceof Error ? error.message : "无法准备保存位置。");
     } finally {
-      setPreparing(false);
+      setPreparing(null);
     }
   }
 
-  async function handleStartDownload() {
-    if (!preparedTask || !selectedFormat || starting) return;
-    activeTask.current = { id: preparedTask.id, sequence: -1 };
+  async function beginDownload(task: DownloadTask) {
+    if (!selectedFormat || starting) return;
+    activeTask.current = {
+      id: task.id,
+      sequence: -1,
+      history: {
+        title: media.title,
+        site: media.site,
+        formatLabel: selectedFormat.label,
+        container: selectedFormat.container,
+        destinationPath: task.destinationPath,
+      },
+    };
     setStarting(true);
     setPrepareError(null);
     onActivityChange({ status: "queued", progress: null });
     try {
-      await startDownload(preparedTask);
+      await startDownload(task);
     } catch (error) {
       activeTask.current = null;
       onActivityChange({ status: "error", progress: null });
@@ -424,7 +456,7 @@ function MediaResult({
               name={formatGroupName}
               value={format.id}
               checked={format.id === selectedFormatId}
-              disabled={downloadActive}
+              disabled={downloadActive || preparing !== null}
               onChange={() => {
                 setSelectedFormatId(format.id);
                 setPreparedTask(null);
@@ -455,24 +487,25 @@ function MediaResult({
           <button className="download-button is-cancel" type="button" onClick={handleCancelDownload}>
             取消下载
           </button>
-        ) : preparedTask && !downloadEvent ? (
-          <button
-            className="download-button"
-            type="button"
-            disabled={starting}
-            onClick={handleStartDownload}
-          >
-            {starting ? "正在开始下载…" : "开始下载"}
-          </button>
         ) : (
-          <button
-            className="download-button"
-            type="button"
-            disabled={!selectedFormat || preparing}
-            onClick={handleChooseDestination}
-          >
-            {preparing ? "正在打开保存位置…" : "选择保存位置"}
-          </button>
+          <div className="download-actions">
+            <button
+              className="download-button is-secondary"
+              type="button"
+              disabled={!selectedFormat || preparing !== null}
+              onClick={() => void prepareAndStart("saveAs")}
+            >
+              {preparing === "saveAs" ? "正在选择…" : "另存为…"}
+            </button>
+            <button
+              className="download-button"
+              type="button"
+              disabled={!selectedFormat || preparing !== null}
+              onClick={() => void prepareAndStart("default")}
+            >
+              {preparing === "default" ? "正在准备…" : "开始下载"}
+            </button>
+          </div>
         )}
       </div>
     </article>

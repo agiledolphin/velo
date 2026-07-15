@@ -28,7 +28,12 @@ pub fn run() {
             let ffmpeg_path = configured_ffmpeg_path();
             let frame_cache = RepresentativeFrameCache::default();
             let settings_path = app.path().app_config_dir()?.join("settings.json");
-            let yt_dlp_options = YtDlpOptions::load(configured_deno_path(), settings_path);
+            let system_download_directory = app.path().download_dir().ok();
+            let yt_dlp_options = YtDlpOptions::load(
+                configured_deno_path(),
+                settings_path,
+                system_download_directory,
+            );
             let runner = RestrictedProcessRunner::new(
                 engine_path.clone(),
                 INSPECT_TIMEOUT,
@@ -67,6 +72,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::download::suggest_download_file_name,
             commands::download::prepare_download_task,
+            commands::download::prepare_default_download_task,
             commands::download::start_download,
             commands::download::cancel_download,
             commands::media::inspect_url,
@@ -74,6 +80,7 @@ pub fn run() {
             commands::settings::get_app_settings,
             commands::settings::set_youtube_cookie_mode,
             commands::settings::configure_youtube_cookie_file,
+            commands::settings::configure_download_directory,
             commands::thumbnail::fetch_thumbnail,
             commands::thumbnail::generate_representative_frame
         ])

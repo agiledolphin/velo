@@ -31,6 +31,7 @@ pub enum YoutubeCookieMode {
 struct AppSettings {
     schema_version: u32,
     sites: SiteSettings,
+    downloads: DownloadSettings,
 }
 
 impl Default for AppSettings {
@@ -38,8 +39,16 @@ impl Default for AppSettings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             sites: SiteSettings::default(),
+            downloads: DownloadSettings::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(default)]
+struct DownloadSettings {
+    directory_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -70,6 +79,15 @@ pub enum CookieFileStatus {
 pub struct SettingsSnapshot {
     schema_version: u32,
     sites: SiteSettingsSnapshot,
+    downloads: DownloadSettingsSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadSettingsSnapshot {
+    directory_path: Option<String>,
+    is_custom: bool,
+    is_available: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,29 +108,45 @@ pub struct YtDlpOptions {
     deno: PathBuf,
     settings_path: Option<PathBuf>,
     settings: Arc<RwLock<AppSettings>>,
+    system_download_directory: Option<PathBuf>,
     authenticated_sources: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl YtDlpOptions {
     pub fn new(deno: impl Into<PathBuf>) -> Self {
-        Self::from_settings(deno.into(), None, AppSettings::default())
+        Self::from_settings(deno.into(), None, AppSettings::default(), None)
     }
 
-    pub fn load(deno: impl Into<PathBuf>, settings_path: PathBuf) -> Self {
+    pub fn load(
+        deno: impl Into<PathBuf>,
+        settings_path: PathBuf,
+        system_download_directory: Option<PathBuf>,
+    ) -> Self {
         let settings = fs::read(&settings_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<AppSettings>(&bytes).ok())
             .filter(|settings| settings.schema_version == SETTINGS_SCHEMA_VERSION)
             .unwrap_or_default();
-        Self::from_settings(deno.into(), Some(settings_path), settings)
+        Self::from_settings(
+            deno.into(),
+            Some(settings_path),
+            settings,
+            system_download_directory,
+        )
     }
 
-    fn from_settings(deno: PathBuf, settings_path: Option<PathBuf>, settings: AppSettings) -> Self {
+    fn from_settings(
+        deno: PathBuf,
+        settings_path: Option<PathBuf>,
+        settings: AppSettings,
+        system_download_directory: Option<PathBuf>,
+    ) -> Self {
         assert!(deno.is_absolute(), "Deno path must be absolute");
         Self {
             deno,
             settings_path,
             settings: Arc::new(RwLock::new(settings)),
+            system_download_directory,
             authenticated_sources: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
@@ -174,6 +208,10 @@ impl YtDlpOptions {
     pub fn settings_snapshot(&self) -> SettingsSnapshot {
         let settings = self.settings();
         let path = settings.sites.youtube.cookie_file_path.clone();
+        let custom_directory = settings.downloads.directory_path.clone();
+        let directory = custom_directory
+            .clone()
+            .or_else(|| self.system_download_directory.clone());
         SettingsSnapshot {
             schema_version: settings.schema_version,
             sites: SiteSettingsSnapshot {
@@ -182,6 +220,11 @@ impl YtDlpOptions {
                     cookie_file_status: cookie_file_status(path.as_deref()),
                     cookie_file_path: path.map(|value| value.to_string_lossy().into_owned()),
                 },
+            },
+            downloads: DownloadSettingsSnapshot {
+                is_custom: custom_directory.is_some(),
+                is_available: directory.as_deref().is_some_and(Path::is_dir),
+                directory_path: directory.map(|value| value.to_string_lossy().into_owned()),
             },
         }
     }
@@ -204,6 +247,28 @@ impl YtDlpOptions {
         };
         self.update_settings(|settings| settings.sites.youtube.cookie_file_path = path)?;
         Ok(self.settings_snapshot())
+    }
+
+    pub fn configure_download_directory(
+        &self,
+        path: Option<&str>,
+    ) -> Result<SettingsSnapshot, InspectError> {
+        let path = match path {
+            Some(path) => Some(validated_download_directory(Path::new(path))?),
+            None => None,
+        };
+        self.update_settings(|settings| settings.downloads.directory_path = path)?;
+        Ok(self.settings_snapshot())
+    }
+
+    pub fn download_directory(&self) -> Result<PathBuf, InspectError> {
+        let settings = self.settings();
+        let path = settings
+            .downloads
+            .directory_path
+            .or_else(|| self.system_download_directory.clone())
+            .ok_or_else(InspectError::settings_unavailable)?;
+        validated_download_directory(&path)
     }
 
     fn update_settings(&self, update: impl FnOnce(&mut AppSettings)) -> Result<(), InspectError> {
@@ -304,6 +369,13 @@ fn validated_cookie_file(path: &Path) -> Result<PathBuf, InspectError> {
     }
     path.canonicalize()
         .map_err(|_| InspectError::invalid_cookie_file())
+}
+
+fn validated_download_directory(path: &Path) -> Result<PathBuf, InspectError> {
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(InspectError::settings_unavailable());
+    }
+    Ok(path.to_path_buf())
 }
 
 pub fn configured_deno_path() -> PathBuf {
@@ -432,17 +504,28 @@ mod tests {
         ));
         let settings_path = root.join("settings.json");
         let cookie_path = cookie_fixture("persist");
-        let options = YtDlpOptions::load(configured_deno_path(), settings_path.clone());
+        let options = YtDlpOptions::load(configured_deno_path(), settings_path.clone(), None);
         options
             .configure_youtube_cookie_file(cookie_path.to_str())
             .expect("cookie should persist");
         options
             .set_youtube_cookie_mode(YoutubeCookieMode::Always)
             .expect("mode should persist");
+        let download_directory = root.join("downloads");
+        fs::create_dir_all(&download_directory).expect("download directory should exist");
+        options
+            .configure_download_directory(download_directory.to_str())
+            .expect("download directory should persist");
 
-        let reloaded = YtDlpOptions::load(configured_deno_path(), settings_path);
+        let reloaded = YtDlpOptions::load(configured_deno_path(), settings_path, None);
         assert!(reloaded.should_use_cookie_initially("https://www.youtube.com/watch?v=1"));
         assert_eq!(reloaded.settings_snapshot().schema_version, 1);
+        assert_eq!(
+            reloaded
+                .download_directory()
+                .expect("directory should reload"),
+            download_directory
+        );
 
         fs::remove_dir_all(root).expect("settings directory should be removed");
         fs::remove_file(cookie_path).expect("cookie fixture should be removed");

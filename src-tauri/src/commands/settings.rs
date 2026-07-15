@@ -25,3 +25,11 @@ pub fn configure_youtube_cookie_file(
 ) -> Result<SettingsSnapshot, InspectError> {
     options.configure_youtube_cookie_file(path.as_deref())
 }
+
+#[tauri::command]
+pub fn configure_download_directory(
+    path: Option<String>,
+    options: State<'_, YtDlpOptions>,
+) -> Result<SettingsSnapshot, InspectError> {
+    options.configure_download_directory(path.as_deref())
+}

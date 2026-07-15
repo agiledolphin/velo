@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -8,6 +8,7 @@ use crate::{
     domain::{
         DownloadModelError, DownloadStreams, DownloadTask, DownloadTaskId, suggested_file_name,
     },
+    infrastructure::YtDlpOptions,
 };
 
 const DOWNLOAD_EVENT_NAME: &str = "download-event";
@@ -103,6 +104,55 @@ pub fn prepare_download_task(
     .map_err(Into::into)
 }
 
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_default_download_task(
+    task_id: String,
+    source_url: String,
+    media_title: String,
+    format_id: String,
+    expected_extension: String,
+    has_video: bool,
+    has_audio: bool,
+    options: State<'_, YtDlpOptions>,
+) -> Result<DownloadTask, PrepareDownloadError> {
+    let directory = options
+        .download_directory()
+        .map_err(|_| PrepareDownloadError {
+            code: "download_directory_unavailable",
+            message: "默认下载目录不可用，请在设置中重新选择。",
+        })?;
+    let file_name = suggested_file_name(&media_title, &expected_extension);
+    let destination =
+        available_destination(&directory, &file_name).ok_or(PrepareDownloadError {
+            code: "destination_unavailable",
+            message: "无法生成可用的目标文件名，请使用另存为。",
+        })?;
+    prepare_download_task(
+        task_id,
+        source_url,
+        media_title,
+        format_id,
+        destination.to_string_lossy().into_owned(),
+        expected_extension,
+        has_video,
+        has_audio,
+    )
+}
+
+fn available_destination(directory: &Path, file_name: &str) -> Option<PathBuf> {
+    let original = directory.join(file_name);
+    if !original.exists() {
+        return Some(original);
+    }
+    let path = Path::new(file_name);
+    let stem = path.file_stem()?.to_string_lossy();
+    let extension = path.extension()?.to_string_lossy();
+    (1..=9_999)
+        .map(|index| directory.join(format!("{stem} ({index}).{extension}")))
+        .find(|candidate| !candidate.exists())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn start_download(
@@ -173,5 +223,26 @@ mod tests {
 
         assert_eq!(error.code, "invalid_destination_path");
         assert!(!error.message.contains("private"));
+    }
+
+    #[test]
+    fn adds_a_number_without_overwriting_an_existing_file() {
+        let root = std::env::temp_dir().join(format!(
+            "velo-destination-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("fixture directory should exist");
+        std::fs::write(root.join("Video.mp4"), b"existing").expect("fixture should exist");
+
+        assert_eq!(
+            available_destination(&root, "Video.mp4"),
+            Some(root.join("Video (1).mp4"))
+        );
+
+        std::fs::remove_dir_all(root).expect("fixture should be removed");
     }
 }

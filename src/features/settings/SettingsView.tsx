@@ -4,10 +4,18 @@ import {
   type CookieFileStatus,
   type YoutubeCookieMode,
   chooseYoutubeCookieFile,
+  chooseDefaultDownloadDirectory,
   clearYoutubeCookieFile,
   getAppSettings,
   setYoutubeCookieMode,
+  resetDefaultDownloadDirectory,
 } from "../../lib/velo-api";
+import {
+  DOWNLOAD_HISTORY_UPDATED_EVENT,
+  clearDownloadHistory,
+  readDownloadHistory,
+  type DownloadHistoryItem,
+} from "../history/download-history";
 
 interface SettingsViewProps {
   onBack: () => void;
@@ -20,7 +28,11 @@ const statusCopy: Record<CookieFileStatus, string> = {
   invalid: "文件格式无效",
 };
 
-const settingsSections = [{ id: "sites", label: "站点" }] as const;
+const settingsSections = [
+  { id: "sites", label: "站点" },
+  { id: "downloads", label: "下载" },
+  { id: "history", label: "下载历史" },
+] as const;
 
 function fileName(path: string | null) {
   if (!path) return "未选择 Cookie 文件";
@@ -28,7 +40,10 @@ function fileName(path: string | null) {
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
+  const [activeSection, setActiveSection] = useState<"sites" | "downloads" | "history">("sites");
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [history, setHistory] = useState<DownloadHistoryItem[]>(() => readDownloadHistory());
+  const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,6 +59,12 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setHistory(readDownloadHistory());
+    globalThis.addEventListener(DOWNLOAD_HISTORY_UPDATED_EVENT, refresh);
+    return () => globalThis.removeEventListener(DOWNLOAD_HISTORY_UPDATED_EVENT, refresh);
   }, []);
 
   async function update(action: () => Promise<AppSettings | null>) {
@@ -71,7 +92,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         </button>
         <div>
           <h1 id="settings-title">设置</h1>
-          <p>管理站点认证与 Velo 的运行方式。</p>
+          <p>管理站点认证、下载记录与 Velo 的运行方式。</p>
         </div>
       </div>
 
@@ -79,26 +100,32 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         <nav className="settings-nav" aria-label="设置分类">
           {settingsSections.map((section) => (
             <button
-              className="is-active"
+              className={activeSection === section.id ? "is-active" : undefined}
               type="button"
-              aria-current="page"
+              aria-current={activeSection === section.id ? "page" : undefined}
               key={section.id}
+              onClick={() => {
+                setActiveSection(section.id);
+                setConfirmClear(false);
+              }}
             >
               {section.label}
             </button>
           ))}
-          <span>更多设置将在这里扩展</span>
+          <span>设置与记录仅保存在这台设备</span>
         </nav>
 
         <div className="settings-content">
-          <header className="settings-section-heading">
-            <div>
-              <h2>站点</h2>
-              <p>认证信息只会发送给对应的网站。</p>
-            </div>
-          </header>
+          {activeSection === "sites" ? (
+            <>
+              <header className="settings-section-heading">
+                <div>
+                  <h2>站点</h2>
+                  <p>认证信息只会发送给对应的网站。</p>
+                </div>
+              </header>
 
-          <section className="site-settings" aria-labelledby="youtube-settings-title">
+              <section className="site-settings" aria-labelledby="youtube-settings-title">
             <div className="site-settings-title">
               <div className="site-monogram" aria-hidden="true">YT</div>
               <div>
@@ -163,9 +190,154 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               Velo 只保存文件路径，不复制 Cookie 内容；该文件不会用于其他站点。
             </p>
             {error && <p className="settings-error" role="alert">{error}</p>}
-          </section>
+              </section>
+            </>
+          ) : activeSection === "downloads" ? (
+            <DownloadSettings
+              settings={settings}
+              busy={busy}
+              error={error}
+              onChoose={() => void update(chooseDefaultDownloadDirectory)}
+              onReset={() => void update(resetDefaultDownloadDirectory)}
+            />
+          ) : (
+            <HistorySettings
+              history={history}
+              confirmClear={confirmClear}
+              onRequestClear={() => setConfirmClear(true)}
+              onCancelClear={() => setConfirmClear(false)}
+              onClear={() => {
+                clearDownloadHistory();
+                setHistory([]);
+                setConfirmClear(false);
+              }}
+            />
+          )}
         </div>
       </div>
     </section>
+  );
+}
+
+function DownloadSettings({
+  settings,
+  busy,
+  error,
+  onChoose,
+  onReset,
+}: {
+  settings: AppSettings | null;
+  busy: boolean;
+  error: string | null;
+  onChoose: () => void;
+  onReset: () => void;
+}) {
+  const downloads = settings?.downloads;
+  return (
+    <>
+      <header className="settings-section-heading">
+        <div>
+          <h2>下载</h2>
+          <p>设置一键下载使用的默认保存位置。</p>
+        </div>
+      </header>
+      <section className="site-settings download-settings" aria-labelledby="download-directory-title">
+        <div className="site-settings-title">
+          <div className="site-monogram" aria-hidden="true">↓</div>
+          <div>
+            <h3 id="download-directory-title">默认下载目录</h3>
+            <p>文件重名时会自动添加序号，不会覆盖已有文件。</p>
+          </div>
+        </div>
+        <div className="settings-field download-directory-field">
+          <span>
+            <strong>{downloads?.isCustom ? "自定义目录" : "系统下载目录"}</strong>
+            <small title={downloads?.directoryPath ?? undefined}>
+              {downloads?.directoryPath ?? "未找到可用的下载目录"}
+            </small>
+          </span>
+          <div className="cookie-file-actions">
+            <span className={`cookie-file-status is-${downloads?.isAvailable ? "ready" : "missing"}`}>
+              {downloads?.isAvailable ? "目录可用" : "需要重新选择"}
+            </span>
+            <button type="button" disabled={busy} onClick={onChoose}>更换目录</button>
+            {downloads?.isCustom && (
+              <button className="is-secondary" type="button" disabled={busy} onClick={onReset}>
+                恢复系统目录
+              </button>
+            )}
+          </div>
+        </div>
+        <p className="settings-security-note">
+          Velo 只保存目录路径；使用“另存为”仍可为单个任务选择其他位置。
+        </p>
+        {error && <p className="settings-error" role="alert">{error}</p>}
+      </section>
+    </>
+  );
+}
+
+function HistorySettings({
+  history,
+  confirmClear,
+  onRequestClear,
+  onCancelClear,
+  onClear,
+}: {
+  history: DownloadHistoryItem[];
+  confirmClear: boolean;
+  onRequestClear: () => void;
+  onCancelClear: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <>
+      <header className="settings-section-heading history-heading">
+        <div>
+          <h2>下载历史</h2>
+          <p>最多保留最近 50 条已完成下载，不保存失败或取消任务。</p>
+        </div>
+        {history.length > 0 && (
+          <div className="history-clear-actions">
+            {confirmClear ? (
+              <>
+                <button type="button" className="is-secondary" onClick={onCancelClear}>取消</button>
+                <button type="button" className="is-danger" onClick={onClear}>确认清空</button>
+              </>
+            ) : (
+              <button type="button" className="is-secondary" onClick={onRequestClear}>清空记录</button>
+            )}
+          </div>
+        )}
+      </header>
+
+      {history.length === 0 ? (
+        <div className="history-empty">
+          <span aria-hidden="true">↓</span>
+          <strong>还没有下载记录</strong>
+          <p>文件成功保存后，会在这里显示标题、格式、完成时间和保存位置。</p>
+        </div>
+      ) : (
+        <ol className="history-list" aria-label="已完成下载">
+          {history.map((item) => (
+            <li key={item.id}>
+              <div className="history-item-main">
+                <strong title={item.title}>{item.title}</strong>
+                <span>{item.site} · {item.formatLabel} · {item.container.toUpperCase()}</span>
+              </div>
+              <time dateTime={item.completedAt}>
+                {new Intl.DateTimeFormat("zh-CN", {
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }).format(new Date(item.completedAt))}
+              </time>
+              <p title={item.destinationPath}>{item.destinationPath}</p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
   );
 }

@@ -77,6 +77,11 @@ export interface AppSettings {
       cookieFileStatus: CookieFileStatus;
     };
   };
+  downloads: {
+    directoryPath: string | null;
+    isCustom: boolean;
+    isAvailable: boolean;
+  };
 }
 
 let browserPreviewSettings: AppSettings = {
@@ -87,6 +92,11 @@ let browserPreviewSettings: AppSettings = {
       cookieFilePath: null,
       cookieFileStatus: "notConfigured",
     },
+  },
+  downloads: {
+    directoryPath: "/Users/preview/Downloads",
+    isCustom: false,
+    isAvailable: true,
   },
 };
 
@@ -222,6 +232,50 @@ export async function clearYoutubeCookieFile(): Promise<AppSettings> {
   }
 }
 
+export async function chooseDefaultDownloadDirectory(): Promise<AppSettings | null> {
+  if (!isTauri()) {
+    browserPreviewSettings = {
+      ...browserPreviewSettings,
+      downloads: {
+        directoryPath: "/Users/preview/Movies/Velo",
+        isCustom: true,
+        isAvailable: true,
+      },
+    };
+    return structuredClone(browserPreviewSettings);
+  }
+  const path = await open({
+    title: "选择默认下载目录",
+    multiple: false,
+    directory: true,
+  });
+  if (!path || Array.isArray(path)) return null;
+  try {
+    return await invoke<AppSettings>("configure_download_directory", { path });
+  } catch (error) {
+    throw settingsError(error, "无法使用这个下载目录，请重新选择。");
+  }
+}
+
+export async function resetDefaultDownloadDirectory(): Promise<AppSettings> {
+  if (!isTauri()) {
+    browserPreviewSettings = {
+      ...browserPreviewSettings,
+      downloads: {
+        directoryPath: "/Users/preview/Downloads",
+        isCustom: false,
+        isAvailable: true,
+      },
+    };
+    return structuredClone(browserPreviewSettings);
+  }
+  try {
+    return await invoke<AppSettings>("configure_download_directory", { path: null });
+  } catch (error) {
+    throw settingsError(error, "无法恢复系统下载目录。");
+  }
+}
+
 function settingsError(error: unknown, fallback: string) {
   if (isInspectFailure(error)) return new VeloApiError(error.message, error.code);
   return new Error(fallback);
@@ -272,6 +326,29 @@ export async function chooseDownloadTarget(
       throw new Error(error.message);
     }
     throw new Error("无法准备保存位置，请重新选择后再试。");
+  }
+}
+
+export async function prepareDefaultDownloadTarget(
+  media: MediaInfo,
+  format: MediaFormat,
+): Promise<DownloadTask> {
+  if (!isTauri()) {
+    throw new Error("请在 Velo 桌面开发模式中测试下载。");
+  }
+  try {
+    return await invoke<DownloadTask>("prepare_default_download_task", {
+      taskId: crypto.randomUUID(),
+      sourceUrl: media.sourceUrl,
+      mediaTitle: media.title,
+      formatId: format.id,
+      expectedExtension: format.container,
+      hasVideo: format.hasVideo,
+      hasAudio: format.hasAudio,
+    });
+  } catch (error) {
+    if (isInspectFailure(error)) throw new Error(error.message);
+    throw new Error("无法使用默认下载目录，请在设置中重新选择。");
   }
 }
 
