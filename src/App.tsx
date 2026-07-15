@@ -13,10 +13,17 @@ import {
   type WorkspaceTab,
 } from "./features/workspace/workspace-tabs";
 import { isTauri } from "@tauri-apps/api/core";
+import {
+  DEFAULT_MAX_CONCURRENT_INSPECTIONS,
+  TaskScheduler,
+} from "./features/downloads/task-scheduler";
 
 export default function App() {
   const [view, setView] = useState<"home" | "settings">("home");
   const nextTabSequence = useRef(2);
+  const inspectionScheduler = useRef(
+    new TaskScheduler(DEFAULT_MAX_CONCURRENT_INSPECTIONS),
+  );
   const [tabs, setTabs] = useState<WorkspaceTab[]>(() => [
     createWorkspaceTab(crypto.randomUUID(), 1),
   ]);
@@ -38,7 +45,11 @@ export default function App() {
   const closeTab = useCallback(
     (id: string) => {
       const target = tabs.find((tab) => tab.id === id);
-      if (!target || target.status === "downloading") return;
+      if (
+        !target ||
+        target.status === "downloadQueued" ||
+        target.status === "downloading"
+      ) return;
 
       const suggestedActiveId = activeTabAfterClose(tabs, id);
       const remaining = tabs.filter((tab) => tab.id !== id);
@@ -189,8 +200,12 @@ export default function App() {
                       className="task-tab-close"
                       type="button"
                       aria-label={`关闭 ${title}`}
-                      disabled={tab.status === "downloading"}
+                      disabled={
+                        tab.status === "downloadQueued" ||
+                        tab.status === "downloading"
+                      }
                       title={
+                        tab.status === "downloadQueued" ||
                         tab.status === "downloading"
                           ? "请先取消下载，再关闭任务"
                           : "关闭任务（⌘W / Ctrl+W）"
@@ -229,6 +244,7 @@ export default function App() {
                   <MediaInspector
                     tabId={tab.id}
                     active={active && view === "home"}
+                    scheduler={inspectionScheduler.current}
                     onOpenSettings={() => setView("settings")}
                     onSnapshotChange={handleTabSnapshot}
                   />

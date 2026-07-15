@@ -6,6 +6,7 @@ import type {
   WorkspaceTabStatus,
 } from "../workspace/workspace-tabs";
 import { InspectionGeneration } from "./inspection-generation";
+import type { TaskScheduler } from "./task-scheduler";
 import {
   cancelDownload,
   chooseDownloadTarget,
@@ -20,12 +21,13 @@ import {
 
 type InspectorState =
   | { status: "idle"; notice?: string }
+  | { status: "queued" }
   | { status: "loading" }
   | { status: "ready"; media: MediaInfo }
   | { status: "error"; message: string; code?: string };
 
 interface DownloadActivity {
-  status: "idle" | "downloading" | "completed" | "error";
+  status: "idle" | "queued" | "downloading" | "completed" | "error";
   progress: number | null;
 }
 
@@ -60,11 +62,13 @@ function formatEta(seconds: number | null) {
 export function MediaInspector({
   tabId,
   active,
+  scheduler,
   onOpenSettings,
   onSnapshotChange,
 }: {
   tabId: string;
   active: boolean;
+  scheduler: TaskScheduler;
   onOpenSettings: () => void;
   onSnapshotChange: (tabId: string, snapshot: InspectorTabSnapshot) => void;
 }) {
@@ -76,7 +80,10 @@ export function MediaInspector({
     status: "idle",
     progress: null,
   });
-  const downloadBusy = downloadActivity.status === "downloading";
+  const downloadBusy =
+    downloadActivity.status === "queued" ||
+    downloadActivity.status === "downloading";
+  const inspectionBusy = state.status === "queued" || state.status === "loading";
   const inspectionGeneration = useRef(new InspectionGeneration());
   const activeRequest = useRef<{
     id: string;
@@ -99,9 +106,11 @@ export function MediaInspector({
 
   useEffect(() => {
     let status: WorkspaceTabStatus;
-    if (downloadActivity.status === "downloading") status = "downloading";
+    if (downloadActivity.status === "queued") status = "downloadQueued";
+    else if (downloadActivity.status === "downloading") status = "downloading";
     else if (downloadActivity.status === "completed") status = "completed";
     else if (downloadActivity.status === "error") status = "error";
+    else if (state.status === "queued") status = "parseQueued";
     else status = state.status;
 
     onSnapshotChange(tabId, {
@@ -135,12 +144,21 @@ export function MediaInspector({
     const controller = new AbortController();
     activeRequest.current = { id: requestId, controller };
     setDownloadActivity({ status: "idle", progress: null });
-    setState({ status: "loading" });
+    setState({ status: "queued" });
     try {
-      const media = await inspectMedia(normalizedUrl, {
-        requestId,
-        signal: controller.signal,
-      });
+      const media = await scheduler.schedule(
+        controller.signal,
+        () => {
+          if (inspectionGeneration.current.isCurrent(generation)) {
+            setState({ status: "loading" });
+          }
+        },
+        () =>
+          inspectMedia(normalizedUrl, {
+            requestId,
+            signal: controller.signal,
+          }),
+      );
       if (!inspectionGeneration.current.isCurrent(generation)) return;
       activeRequest.current = null;
       setState({ status: "ready", media });
@@ -175,7 +193,7 @@ export function MediaInspector({
             autoComplete="url"
             placeholder="https://example.com/video"
             value={url}
-            disabled={state.status === "loading" || downloadBusy}
+            disabled={inspectionBusy || downloadBusy}
             aria-describedby={state.status === "error" ? `${inputId}-error` : undefined}
             onChange={(event) => {
               setUrl(event.target.value);
@@ -189,11 +207,11 @@ export function MediaInspector({
             }}
           />
           <button
-            className={state.status === "loading" ? "cancel-inspection" : undefined}
+            className={inspectionBusy ? "cancel-inspection" : undefined}
             type="submit"
             disabled={downloadBusy}
             onClick={
-              state.status === "loading"
+              inspectionBusy
                 ? (event) => {
                     event.preventDefault();
                     handleCancel();
@@ -203,10 +221,12 @@ export function MediaInspector({
           >
             {downloadBusy
               ? "下载进行中"
-              : state.status === "loading"
-                ? "取消解析"
+              : state.status === "queued"
+                ? "取消等待"
+                : state.status === "loading"
+                  ? "取消解析"
                 : "解析视频"}
-            <span aria-hidden="true">{state.status === "loading" ? "×" : "→"}</span>
+            <span aria-hidden="true">{inspectionBusy ? "×" : "→"}</span>
           </button>
           <span className="capture-glint" aria-hidden="true" />
         </div>
@@ -234,6 +254,20 @@ export function MediaInspector({
             <div>
               <strong>正在辨认页面内容</strong>
               <p>检查标题、时长与可用画质…</p>
+            </div>
+          </div>
+        )}
+
+        {state.status === "queued" && (
+          <div className="loading-state is-queued">
+            <span className="queue-indicator" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <div>
+              <strong>正在等待解析</strong>
+              <p>已有两个任务正在解析，空位后会自动开始。</p>
             </div>
           </div>
         )}
@@ -307,6 +341,8 @@ function MediaResult({
         onActivityChange({ status: "error", progress: null });
       } else if (event.type === "cancelled") {
         onActivityChange({ status: "idle", progress: null });
+      } else if (event.type === "queued") {
+        onActivityChange({ status: "queued", progress: null });
       } else if (event.type === "progress") {
         const total = event.progress.totalBytes;
         const progress =
@@ -351,7 +387,7 @@ function MediaResult({
     activeTask.current = { id: preparedTask.id, sequence: -1 };
     setStarting(true);
     setPrepareError(null);
-    onActivityChange({ status: "downloading", progress: null });
+    onActivityChange({ status: "queued", progress: null });
     try {
       await startDownload(preparedTask);
     } catch (error) {
@@ -469,7 +505,10 @@ function DownloadStatus({
     return <div className="download-result is-complete" role="status"><strong>下载完成</strong><span title={task.destinationPath}>{task.destinationPath}</span></div>;
   }
   if (event.type === "cancelled") {
-    return <div className="download-result" role="status"><strong>下载已取消</strong><p>未完成的临时文件将在后续清理功能中处理。</p></div>;
+    return <div className="download-result" role="status"><strong>下载已取消</strong><p>未完成的临时文件已安全清理。</p></div>;
+  }
+  if (event.type === "queued") {
+    return <div className="download-result is-queued" role="status"><strong>等待下载</strong><p>已有两个任务正在下载，空位后会自动开始。</p></div>;
   }
 
   const progress = event.type === "progress" ? event.progress : null;

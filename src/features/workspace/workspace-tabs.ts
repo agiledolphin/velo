@@ -2,9 +2,11 @@ export const MAX_WORKSPACE_TABS = 8;
 
 export type WorkspaceTabStatus =
   | "idle"
+  | "parseQueued"
   | "loading"
   | "ready"
   | "error"
+  | "downloadQueued"
   | "downloading"
   | "completed";
 
@@ -62,12 +64,16 @@ export function activeTabAfterClose(tabs: WorkspaceTab[], closingId: string) {
 
 export function workspaceTabStatusLabel(tab: WorkspaceTab) {
   switch (tab.status) {
+    case "parseQueued":
+      return "等待解析";
     case "loading":
       return "正在解析";
     case "ready":
       return "已解析";
     case "error":
       return "需要处理";
+    case "downloadQueued":
+      return "等待下载";
     case "downloading":
       return tab.progress === null ? "正在下载" : `正在下载 ${tab.progress}%`;
     case "completed":
