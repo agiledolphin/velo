@@ -48,7 +48,7 @@ async function loadProjectFile(path: string): Promise<string> {
 }
 
 describe("Tauri sidecar bundle configuration", () => {
-  it("keeps the release version consistent across the application", async () => {
+  it("keeps release metadata consistent without displaying it in the header", async () => {
     const config = await loadTauriConfig();
     const packageJson = JSON.parse(
       await loadProjectFile("package.json"),
@@ -59,9 +59,7 @@ describe("Tauri sidecar bundle configuration", () => {
     expect(packageJson.version).toBe("0.2.0");
     expect(config.version).toBe(packageJson.version);
     expect(cargoManifest).toContain(`version = "${packageJson.version}"`);
-    expect(app).toContain(
-      `<p className="build-label">${packageJson.version}</p>`,
-    );
+    expect(app).not.toContain("build-label");
     expect(app).not.toContain("PREVIEW ·");
   });
 

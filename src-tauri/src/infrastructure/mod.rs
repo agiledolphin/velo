@@ -15,4 +15,6 @@ pub(crate) use representative_frame::{
 pub(crate) use thumbnail_fetcher::{ThumbnailError, ThumbnailFetcher};
 pub(crate) use yt_dlp_downloader::{YtDlpDownloader, configured_ffmpeg_path};
 pub use yt_dlp_engine::{YtDlpEngine, configured_yt_dlp_path};
-pub(crate) use yt_dlp_options::{YtDlpOptions, configured_deno_path};
+pub(crate) use yt_dlp_options::{
+    SettingsSnapshot, YoutubeCookieMode, YtDlpOptions, configured_deno_path,
+};

@@ -1,10 +1,14 @@
 import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import type { DownloadEvent, DownloadTask, MediaInfo } from "../../lib/media";
-import { normalizeWebUrl } from "../../lib/url";
+import { isYoutubeUrl, normalizeWebUrl } from "../../lib/url";
+import type {
+  InspectorTabSnapshot,
+  WorkspaceTabStatus,
+} from "../workspace/workspace-tabs";
+import { InspectionGeneration } from "./inspection-generation";
 import {
   cancelDownload,
   chooseDownloadTarget,
-  chooseCookieFile,
   fetchThumbnailDataUrl,
   generateRepresentativeFrameDataUrl,
   inspectMedia,
@@ -19,6 +23,11 @@ type InspectorState =
   | { status: "loading" }
   | { status: "ready"; media: MediaInfo }
   | { status: "error"; message: string; code?: string };
+
+interface DownloadActivity {
+  status: "idle" | "downloading" | "completed" | "error";
+  progress: number | null;
+}
 
 function formatDuration(seconds: number | null) {
   if (seconds === null) return "时长未知";
@@ -48,12 +57,27 @@ function formatEta(seconds: number | null) {
   return `约 ${Math.ceil(seconds / 60)} 分钟`;
 }
 
-export function MediaInspector() {
+export function MediaInspector({
+  tabId,
+  active,
+  onOpenSettings,
+  onSnapshotChange,
+}: {
+  tabId: string;
+  active: boolean;
+  onOpenSettings: () => void;
+  onSnapshotChange: (tabId: string, snapshot: InspectorTabSnapshot) => void;
+}) {
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [url, setUrl] = useState("");
   const [state, setState] = useState<InspectorState>({ status: "idle" });
-  const [downloadBusy, setDownloadBusy] = useState(false);
-  const [cookieBusy, setCookieBusy] = useState(false);
+  const [downloadActivity, setDownloadActivity] = useState<DownloadActivity>({
+    status: "idle",
+    progress: null,
+  });
+  const downloadBusy = downloadActivity.status === "downloading";
+  const inspectionGeneration = useRef(new InspectionGeneration());
   const activeRequest = useRef<{
     id: string;
     controller: AbortController;
@@ -61,17 +85,38 @@ export function MediaInspector() {
 
   useEffect(
     () => () => {
-      activeRequest.current?.controller.abort();
+      inspectionGeneration.current.invalidate();
+      const request = activeRequest.current;
+      activeRequest.current = null;
+      request?.controller.abort();
     },
     [],
   );
 
-  function handleCancel() {
-    const request = activeRequest.current;
-    if (!request) return;
+  useEffect(() => {
+    if (active && !url) inputRef.current?.focus();
+  }, [active, url]);
 
+  useEffect(() => {
+    let status: WorkspaceTabStatus;
+    if (downloadActivity.status === "downloading") status = "downloading";
+    else if (downloadActivity.status === "completed") status = "completed";
+    else if (downloadActivity.status === "error") status = "error";
+    else status = state.status;
+
+    onSnapshotChange(tabId, {
+      url,
+      title: state.status === "ready" ? state.media.title : null,
+      status,
+      progress: downloadActivity.progress,
+    });
+  }, [downloadActivity, onSnapshotChange, state, tabId, url]);
+
+  function handleCancel() {
+    inspectionGeneration.current.invalidate();
+    const request = activeRequest.current;
     activeRequest.current = null;
-    request.controller.abort();
+    request?.controller.abort();
     setState({ status: "idle", notice: "解析已取消" });
   }
 
@@ -86,19 +131,21 @@ export function MediaInspector() {
     }
 
     const requestId = crypto.randomUUID();
+    const generation = inspectionGeneration.current.start();
     const controller = new AbortController();
     activeRequest.current = { id: requestId, controller };
+    setDownloadActivity({ status: "idle", progress: null });
     setState({ status: "loading" });
     try {
       const media = await inspectMedia(normalizedUrl, {
         requestId,
         signal: controller.signal,
       });
-      if (activeRequest.current?.id !== requestId) return;
+      if (!inspectionGeneration.current.isCurrent(generation)) return;
       activeRequest.current = null;
       setState({ status: "ready", media });
     } catch (error) {
-      if (activeRequest.current?.id !== requestId) return;
+      if (!inspectionGeneration.current.isCurrent(generation)) return;
       activeRequest.current = null;
       if (isInspectionAbort(error)) {
         setState({ status: "idle", notice: "解析已取消" });
@@ -112,28 +159,6 @@ export function MediaInspector() {
     }
   }
 
-  async function handleChooseCookie() {
-    if (cookieBusy) return;
-    setCookieBusy(true);
-    try {
-      const configured = await chooseCookieFile();
-      if (configured) {
-        setState({
-          status: "idle",
-          notice: "Cookie 已在本次运行中启用，请重新解析地址",
-        });
-      }
-    } catch (error) {
-      setState({
-        status: "error",
-        message: error instanceof Error ? error.message : "无法使用这个 Cookie 文件。",
-        code: error instanceof VeloApiError ? error.code : undefined,
-      });
-    } finally {
-      setCookieBusy(false);
-    }
-  }
-
   return (
     <div className="inspector">
       <form className="capture-form" onSubmit={handleSubmit} noValidate>
@@ -143,6 +168,7 @@ export function MediaInspector() {
             ↗
           </span>
           <input
+            ref={inputRef}
             id={inputId}
             type="url"
             inputMode="url"
@@ -153,6 +179,7 @@ export function MediaInspector() {
             aria-describedby={state.status === "error" ? `${inputId}-error` : undefined}
             onChange={(event) => {
               setUrl(event.target.value);
+              setDownloadActivity({ status: "idle", progress: null });
               if (
                 state.status === "error" ||
                 (state.status === "idle" && state.notice)
@@ -163,9 +190,16 @@ export function MediaInspector() {
           />
           <button
             className={state.status === "loading" ? "cancel-inspection" : undefined}
-            type={state.status === "loading" ? "button" : "submit"}
+            type="submit"
             disabled={downloadBusy}
-            onClick={state.status === "loading" ? handleCancel : undefined}
+            onClick={
+              state.status === "loading"
+                ? (event) => {
+                    event.preventDefault();
+                    handleCancel();
+                  }
+                : undefined
+            }
           >
             {downloadBusy
               ? "下载进行中"
@@ -210,24 +244,26 @@ export function MediaInspector() {
             <p>{state.message}</p>
             {["authentication_required", "invalid_cookie_file"].includes(
               state.code ?? "",
-            ) && (
+            ) && isYoutubeUrl(url) && (
               <>
                 <button
                   className="cookie-button"
                   type="button"
-                  disabled={cookieBusy}
-                  onClick={handleChooseCookie}
+                  onClick={onOpenSettings}
                 >
-                  {cookieBusy ? "正在读取…" : "选择 Cookie 文件"}
+                  配置 YouTube Cookie
                 </button>
-                <small>仅在本次运行中使用，退出 Velo 后自动清除。</small>
+                <small>配置只作用于 YouTube，可随时在设置中更换或清除。</small>
               </>
             )}
           </div>
         )}
 
         {state.status === "ready" && (
-          <MediaResult media={state.media} onBusyChange={setDownloadBusy} />
+          <MediaResult
+            media={state.media}
+            onActivityChange={setDownloadActivity}
+          />
         )}
       </div>
     </div>
@@ -236,11 +272,12 @@ export function MediaInspector() {
 
 function MediaResult({
   media,
-  onBusyChange,
+  onActivityChange,
 }: {
   media: MediaInfo;
-  onBusyChange: (busy: boolean) => void;
+  onActivityChange: (activity: DownloadActivity) => void;
 }) {
+  const formatGroupName = useId();
   const [selectedFormatId, setSelectedFormatId] = useState(media.formats[0]?.id ?? "");
   const [preparing, setPreparing] = useState(false);
   const [preparedTask, setPreparedTask] = useState<DownloadTask | null>(null);
@@ -264,8 +301,21 @@ function MediaResult({
       if (!active || event.taskId !== active.id || event.sequence <= active.sequence) return;
       active.sequence = event.sequence;
       setDownloadEvent(event);
-      if (["completed", "cancelled", "failed"].includes(event.type)) {
-        onBusyChange(false);
+      if (event.type === "completed") {
+        onActivityChange({ status: "completed", progress: 100 });
+      } else if (event.type === "failed") {
+        onActivityChange({ status: "error", progress: null });
+      } else if (event.type === "cancelled") {
+        onActivityChange({ status: "idle", progress: null });
+      } else if (event.type === "progress") {
+        const total = event.progress.totalBytes;
+        const progress =
+          total && total > 0
+            ? Math.min(Math.round((event.progress.downloadedBytes / total) * 100), 100)
+            : null;
+        onActivityChange({ status: "downloading", progress });
+      } else {
+        onActivityChange({ status: "downloading", progress: null });
       }
     }).then((stop) => {
       if (disposed) stop();
@@ -276,7 +326,7 @@ function MediaResult({
       disposed = true;
       unlisten?.();
     };
-  }, [onBusyChange]);
+  }, [onActivityChange]);
 
   async function handleChooseDestination() {
     if (!selectedFormat || preparing) return;
@@ -285,6 +335,7 @@ function MediaResult({
     setPreparedTask(null);
     setDownloadEvent(null);
     activeTask.current = null;
+    onActivityChange({ status: "idle", progress: null });
     try {
       const task = await chooseDownloadTarget(media, selectedFormat);
       if (task) setPreparedTask(task);
@@ -300,12 +351,12 @@ function MediaResult({
     activeTask.current = { id: preparedTask.id, sequence: -1 };
     setStarting(true);
     setPrepareError(null);
-    onBusyChange(true);
+    onActivityChange({ status: "downloading", progress: null });
     try {
       await startDownload(preparedTask);
     } catch (error) {
       activeTask.current = null;
-      onBusyChange(false);
+      onActivityChange({ status: "error", progress: null });
       setPrepareError(error instanceof Error ? error.message : "无法开始下载。");
     } finally {
       setStarting(false);
@@ -324,7 +375,7 @@ function MediaResult({
         <MediaThumbnail media={media} />
         <div>
           <span className="site-label">{media.site}</span>
-          <h2>{media.title}</h2>
+          <h2 title={media.title}>{media.title}</h2>
           <p>{formatDuration(media.durationSeconds)} · 解析结果</p>
         </div>
       </div>
@@ -334,7 +385,7 @@ function MediaResult({
           <label className="format-option" key={format.id}>
             <input
               type="radio"
-              name="media-format"
+              name={formatGroupName}
               value={format.id}
               checked={format.id === selectedFormatId}
               disabled={downloadActive}
@@ -342,6 +393,7 @@ function MediaResult({
                 setSelectedFormatId(format.id);
                 setPreparedTask(null);
                 setPrepareError(null);
+                onActivityChange({ status: "idle", progress: null });
               }}
             />
             <span className="radio-mark" aria-hidden="true" />
@@ -352,37 +404,41 @@ function MediaResult({
         ))}
       </div>
 
-      {preparedTask && (
-        <DownloadStatus task={preparedTask} event={downloadEvent} starting={starting} />
-      )}
-      {prepareError && <p className="download-error" role="alert">{prepareError}</p>}
-      {starting ? (
-        <button className="download-button" type="button" disabled>
-          正在开始下载…
-        </button>
-      ) : downloadActive ? (
-        <button className="download-button is-cancel" type="button" onClick={handleCancelDownload}>
-          取消下载
-        </button>
-      ) : preparedTask && !downloadEvent ? (
-        <button
-          className="download-button"
-          type="button"
-          disabled={starting}
-          onClick={handleStartDownload}
-        >
-          {starting ? "正在开始下载…" : "开始下载"}
-        </button>
-      ) : (
-        <button
-          className="download-button"
-          type="button"
-          disabled={!selectedFormat || preparing}
-          onClick={handleChooseDestination}
-        >
-          {preparing ? "正在打开保存位置…" : "选择保存位置"}
-        </button>
-      )}
+      <div className="download-dock">
+        <div className="download-feedback">
+          {preparedTask && (
+            <DownloadStatus task={preparedTask} event={downloadEvent} starting={starting} />
+          )}
+          {prepareError && <p className="download-error" role="alert">{prepareError}</p>}
+        </div>
+        {starting ? (
+          <button className="download-button" type="button" disabled>
+            正在开始下载…
+          </button>
+        ) : downloadActive ? (
+          <button className="download-button is-cancel" type="button" onClick={handleCancelDownload}>
+            取消下载
+          </button>
+        ) : preparedTask && !downloadEvent ? (
+          <button
+            className="download-button"
+            type="button"
+            disabled={starting}
+            onClick={handleStartDownload}
+          >
+            {starting ? "正在开始下载…" : "开始下载"}
+          </button>
+        ) : (
+          <button
+            className="download-button"
+            type="button"
+            disabled={!selectedFormat || preparing}
+            onClick={handleChooseDestination}
+          >
+            {preparing ? "正在打开保存位置…" : "选择保存位置"}
+          </button>
+        )}
+      </div>
     </article>
   );
 }

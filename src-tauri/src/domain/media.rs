@@ -115,6 +115,13 @@ impl InspectError {
         }
     }
 
+    pub fn settings_unavailable() -> Self {
+        Self {
+            code: "settings_unavailable",
+            message: "无法保存设置，请检查应用配置目录是否可写。".into(),
+        }
+    }
+
     pub fn content_unavailable() -> Self {
         Self {
             code: "content_unavailable",

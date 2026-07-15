@@ -65,6 +65,31 @@ export interface InspectMediaOptions {
   signal: AbortSignal;
 }
 
+export type YoutubeCookieMode = "disabled" | "onDemand" | "always";
+export type CookieFileStatus = "notConfigured" | "ready" | "missing" | "invalid";
+
+export interface AppSettings {
+  schemaVersion: number;
+  sites: {
+    youtube: {
+      cookieMode: YoutubeCookieMode;
+      cookieFilePath: string | null;
+      cookieFileStatus: CookieFileStatus;
+    };
+  };
+}
+
+let browserPreviewSettings: AppSettings = {
+  schemaVersion: 1,
+  sites: {
+    youtube: {
+      cookieMode: "onDemand",
+      cookieFilePath: null,
+      cookieFileStatus: "notConfigured",
+    },
+  },
+};
+
 function abortError() {
   return new DOMException("解析已取消。", "AbortError");
 }
@@ -117,9 +142,47 @@ export async function inspectMedia(
   }
 }
 
-export async function chooseCookieFile(): Promise<boolean | null> {
+export async function getAppSettings(): Promise<AppSettings> {
+  if (!isTauri()) return structuredClone(browserPreviewSettings);
+  try {
+    return await invoke<AppSettings>("get_app_settings");
+  } catch (error) {
+    throw settingsError(error, "无法读取应用设置。");
+  }
+}
+
+export async function setYoutubeCookieMode(
+  mode: YoutubeCookieMode,
+): Promise<AppSettings> {
   if (!isTauri()) {
-    throw new Error("请在 Velo 桌面开发模式中选择 Cookie 文件。");
+    browserPreviewSettings = {
+      ...browserPreviewSettings,
+      sites: {
+        youtube: { ...browserPreviewSettings.sites.youtube, cookieMode: mode },
+      },
+    };
+    return structuredClone(browserPreviewSettings);
+  }
+  try {
+    return await invoke<AppSettings>("set_youtube_cookie_mode", { mode });
+  } catch (error) {
+    throw settingsError(error, "无法保存 Cookie 使用方式。");
+  }
+}
+
+export async function chooseYoutubeCookieFile(): Promise<AppSettings | null> {
+  if (!isTauri()) {
+    browserPreviewSettings = {
+      ...browserPreviewSettings,
+      sites: {
+        youtube: {
+          ...browserPreviewSettings.sites.youtube,
+          cookieFilePath: "/Users/preview/Downloads/youtube-cookies.txt",
+          cookieFileStatus: "ready",
+        },
+      },
+    };
+    return structuredClone(browserPreviewSettings);
   }
   const path = await open({
     title: "选择从浏览器导出的 Cookie 文件",
@@ -129,13 +192,39 @@ export async function chooseCookieFile(): Promise<boolean | null> {
   });
   if (!path || Array.isArray(path)) return null;
   try {
-    return await invoke<boolean>("configure_cookie_file", { path });
+    return await invoke<AppSettings>("configure_youtube_cookie_file", { path });
   } catch (error) {
     if (isInspectFailure(error)) {
       throw new VeloApiError(error.message, error.code);
     }
     throw new Error("无法使用这个 Cookie 文件，请重新导出后再试。");
   }
+}
+
+export async function clearYoutubeCookieFile(): Promise<AppSettings> {
+  if (!isTauri()) {
+    browserPreviewSettings = {
+      ...browserPreviewSettings,
+      sites: {
+        youtube: {
+          ...browserPreviewSettings.sites.youtube,
+          cookieFilePath: null,
+          cookieFileStatus: "notConfigured",
+        },
+      },
+    };
+    return structuredClone(browserPreviewSettings);
+  }
+  try {
+    return await invoke<AppSettings>("configure_youtube_cookie_file", { path: null });
+  } catch (error) {
+    throw settingsError(error, "无法清除 Cookie 文件设置。");
+  }
+}
+
+function settingsError(error: unknown, fallback: string) {
+  if (isInspectFailure(error)) return new VeloApiError(error.message, error.code);
+  return new Error(fallback);
 }
 
 interface DownloadFileSuggestion {

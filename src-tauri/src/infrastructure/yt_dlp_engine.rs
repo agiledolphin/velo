@@ -67,15 +67,39 @@ impl MediaEngine for YtDlpEngine {
     fn inspect<'a>(&'a self, source: &'a str) -> InspectFuture<'a> {
         Box::pin(async move {
             let source_url = validate_source_url(source)?;
-            let arguments = inspection_arguments(source_url.as_str(), &self.options);
-            let output = self
+            let use_cookie = self
+                .options
+                .should_use_cookie_initially(source_url.as_str());
+            let arguments = inspection_arguments(source_url.as_str(), &self.options, use_cookie);
+            let mut output = self
                 .runner
                 .run(&arguments)
                 .await
                 .map_err(map_process_error)?;
 
             if !output.success {
-                return Err(classify_engine_failure(&output.stderr));
+                let error = classify_engine_failure(&output.stderr);
+                if error.code == "authentication_required"
+                    && self.options.should_retry_with_cookie(source_url.as_str())
+                {
+                    output = self
+                        .runner
+                        .run(&inspection_arguments(
+                            source_url.as_str(),
+                            &self.options,
+                            true,
+                        ))
+                        .await
+                        .map_err(map_process_error)?;
+                    if output.success {
+                        self.options
+                            .remember_authenticated_source(source_url.as_str());
+                    } else {
+                        return Err(classify_engine_failure(&output.stderr));
+                    }
+                } else {
+                    return Err(error);
+                }
             }
 
             let (media, stream) = parse_media_info(&output.stdout, &source_url)?;
@@ -122,7 +146,7 @@ fn validate_source_url(source: &str) -> Result<Url, InspectError> {
     Ok(url)
 }
 
-fn inspection_arguments(source: &str, options: &YtDlpOptions) -> Vec<OsString> {
+fn inspection_arguments(source: &str, options: &YtDlpOptions, use_cookie: bool) -> Vec<OsString> {
     let mut arguments = [
         "--ignore-config",
         "--no-plugin-dirs",
@@ -137,7 +161,7 @@ fn inspection_arguments(source: &str, options: &YtDlpOptions) -> Vec<OsString> {
     .into_iter()
     .map(OsString::from)
     .collect();
-    options.append_engine_arguments(&mut arguments);
+    options.append_engine_arguments(&mut arguments, source, use_cookie);
     arguments.push(OsString::from("--"));
     arguments.push(OsString::from(source));
     arguments
@@ -452,7 +476,7 @@ struct RawMediaFormat {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::ready, sync::Mutex, time::Duration};
+    use std::{collections::VecDeque, fs, future::ready, sync::Mutex, time::Duration};
 
     use super::*;
     use crate::infrastructure::process_runner::{ProcessFuture, ProcessOutput};
@@ -501,6 +525,28 @@ mod tests {
                 .expect("arguments lock should remain available")
                 .clone_from(&arguments.to_vec());
             Box::pin(ready(self.result.clone()))
+        }
+    }
+
+    #[derive(Clone)]
+    struct SequenceRunner {
+        results: Arc<Mutex<VecDeque<ProcessOutput>>>,
+        calls: Arc<Mutex<Vec<Vec<OsString>>>>,
+    }
+
+    impl ProcessRunner for SequenceRunner {
+        fn run<'a>(&'a self, arguments: &'a [OsString]) -> ProcessFuture<'a> {
+            self.calls
+                .lock()
+                .expect("calls lock should remain available")
+                .push(arguments.to_vec());
+            let result = self
+                .results
+                .lock()
+                .expect("results lock should remain available")
+                .pop_front()
+                .expect("a configured result should be available");
+            Box::pin(ready(Ok(result)))
         }
     }
 
@@ -690,6 +736,60 @@ mod tests {
             .expect_err("nonzero engine output should fail");
 
         assert_eq!(error.code, "authentication_required");
+    }
+
+    #[tokio::test]
+    async fn retries_youtube_with_cookie_only_after_authentication_failure() {
+        let cookie_path = env::temp_dir().join(format!(
+            "velo-youtube-retry-{}-{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        fs::write(
+            &cookie_path,
+            b"# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tname\tvalue\n",
+        )
+        .expect("cookie fixture should be written");
+        let options = YtDlpOptions::new(configured_deno_path());
+        options
+            .configure_youtube_cookie_file(cookie_path.to_str())
+            .expect("cookie should be configured");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let runner = SequenceRunner {
+            results: Arc::new(Mutex::new(VecDeque::from([
+                ProcessOutput {
+                    success: false,
+                    exit_code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: b"ERROR: Sign in to confirm you're not a bot".to_vec(),
+                },
+                ProcessOutput {
+                    success: true,
+                    exit_code: Some(0),
+                    stdout: FIXTURE.to_vec(),
+                    stderr: Vec::new(),
+                },
+            ]))),
+            calls: Arc::clone(&calls),
+        };
+        let engine =
+            YtDlpEngine::with_options(runner, RepresentativeFrameCache::default(), options.clone());
+        let source = "https://www.youtube.com/watch?v=42";
+
+        engine
+            .inspect(source)
+            .await
+            .expect("authenticated retry should succeed");
+
+        let calls = calls.lock().expect("calls should be available");
+        assert_eq!(calls.len(), 2);
+        assert!(!calls[0].iter().any(|argument| argument == "--cookies"));
+        assert!(calls[1].iter().any(|argument| argument == "--cookies"));
+        assert!(options.should_use_cookie_for_media(source));
+        fs::remove_file(cookie_path).expect("cookie fixture should be removed");
     }
 
     #[tokio::test]

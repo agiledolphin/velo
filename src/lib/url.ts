@@ -16,3 +16,16 @@ export function normalizeWebUrl(value: string): string | null {
     return null;
   }
 }
+
+export function isYoutubeUrl(value: string): boolean {
+  const normalized = normalizeWebUrl(value);
+  if (!normalized) return false;
+  const host = new URL(normalized).hostname.toLowerCase();
+  return (
+    host === "youtu.be" ||
+    host === "youtube.com" ||
+    host.endsWith(".youtube.com") ||
+    host === "youtube-nocookie.com" ||
+    host.endsWith(".youtube-nocookie.com")
+  );
+}

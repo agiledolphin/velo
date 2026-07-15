@@ -178,7 +178,11 @@ fn stream_arguments(source: &str, options: &YtDlpOptions) -> Vec<OsString> {
     .into_iter()
     .map(OsString::from)
     .collect();
-    options.append_engine_arguments(&mut arguments);
+    options.append_engine_arguments(
+        &mut arguments,
+        source,
+        options.should_use_cookie_for_media(source),
+    );
     arguments.push(OsString::from("--"));
     arguments.push(OsString::from(source));
     arguments

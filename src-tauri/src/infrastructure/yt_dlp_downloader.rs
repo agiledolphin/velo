@@ -231,7 +231,11 @@ fn download_arguments(
     .map(OsString::from)
     .collect::<Vec<_>>();
     arguments.push(ffmpeg.as_os_str().to_owned());
-    options.append_engine_arguments(&mut arguments);
+    options.append_engine_arguments(
+        &mut arguments,
+        &task.source_url,
+        options.should_use_cookie_for_media(&task.source_url),
+    );
     for value in [
         "--merge-output-format",
         task.output_extension.as_str(),
